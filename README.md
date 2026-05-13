@@ -2,7 +2,7 @@
 
 Internal operations dashboard for Belmazad personnel to monitor live property listings on [belmazad.com](https://belmazad.com).
 
-**Live:** [https://marwan00salah.github.io/belmazad-dashboard/](https://marwan00salah.github.io/belmazad-dashboard/) — access restricted to authorized team members via Cloudflare Access.
+**Live:** [https://marwan00salah.github.io/Belmazad_Properties_Dashboard/](https://marwan00salah.github.io/Belmazad_Properties_Dashboard/) — access restricted to authorized team members via Cloudflare Access.
 
 ## Stack
 
