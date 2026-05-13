@@ -4,6 +4,7 @@
 CLAUDE.md
 COMMENTS.md
 README.internal.md
+LEARNINGS.md
 .claude/
 
 # ── Worker source + deploy notes (the Worker runs on Cloudflare; this is
