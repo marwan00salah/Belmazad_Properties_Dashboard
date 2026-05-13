@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Belmazad — internal operations dashboard for live property listings">
+  <title>Belmazad — Properties</title>
+
+  <link rel="preconnect" href="https://belmazad-proxy.marwan00salah.workers.dev">
+  <link rel="preconnect" href="https://belmazad.com">
+
+  <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            accent: { 50:'#F0FDFA', 100:'#CCFBF1', 500:'#14B8A6', 600:'#0D9488', 700:'#0F766E', 800:'#115E59' },
+            ink:    { 50:'#F8FAFC', 100:'#F1F5F9', 200:'#E2E8F0', 300:'#CBD5E1', 400:'#94A3B8', 500:'#64748B', 600:'#475569', 700:'#334155', 800:'#1E293B', 900:'#0F172A' },
+            ok:     '#10B981',
+            warn:   '#F59E0B',
+            urgent: '#EF4444',
+          },
+          fontFamily: {
+            sans: ['ui-sans-serif','system-ui','-apple-system','Segoe UI','Roboto','Helvetica','Arial','sans-serif']
+          }
+        }
+      }
+    };
+  </script>
+
+  <link rel="stylesheet" href="./css/styles.css">
+</head>
+<body class="bg-ink-50 text-ink-900 antialiased">
+  <div id="app" class="min-h-screen flex flex-col"></div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

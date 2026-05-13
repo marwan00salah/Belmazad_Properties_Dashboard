@@ -1,0 +1,51 @@
+# ── Internal docs and dev tooling — not needed for the deployed site.
+#    Kept locally for development context; excluded from the public repo
+#    to minimize public surface.
+CLAUDE.md
+COMMENTS.md
+README.internal.md
+.claude/
+
+# ── Worker source + deploy notes (the Worker runs on Cloudflare; this is
+#    the source of truth but doesn't need to be public).
+proxy/
+
+# ── API spec / lookup tables / dev scripts (internal data layer).
+#    Note: api-spec/sample-*.json and api-spec/*.html contain real PII
+#    (seller emails/phones, lawyer contacts, bank routing). They MUST
+#    never leave dev machines.
+api-spec/
+
+# ── Secrets / env
+.env
+.env.*
+*.env
+secrets/
+credentials*
+*.key
+*.pem
+
+# ── OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Node (defensive — project doesn't use npm yet, but a future dep would land here)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Build / temp
+dist/
+build/
+tmp/
+.tmp/
+*.log
