@@ -1,4 +1,5 @@
 import { formatNumber, timeUntil, isTrue } from "../format.js";
+import { patchFilters } from "../state.js";
 
 function computeStats(listings) {
   let live = 0, endingSoon = 0, bids = 0;
@@ -6,9 +7,10 @@ function computeStats(listings) {
   for (const l of listings) {
     const t = timeUntil(l.endBidding, now);
     const sold = isTrue(l.propertySold);
-    if (!sold && t.bucket !== "ended" && t.bucket !== "unknown") live++;
-    if (!sold && t.bucket === "soon") endingSoon++;
-    if (!sold && t.bucket === "urgent") endingSoon++;
+    const inProgress = !sold && t.bucket !== "ended" && t.bucket !== "unknown";
+    if (inProgress && l.auctionType === "Online Auction") live++;
+    if (inProgress && t.bucket === "soon") endingSoon++;
+    if (inProgress && t.bucket === "urgent") endingSoon++;
     const n = Number(l.no_of_bids || 0);
     if (Number.isFinite(n)) bids += n;
   }
@@ -20,13 +22,18 @@ function computeStats(listings) {
   };
 }
 
-function tile({ label, value, accent }) {
-  const el = document.createElement("div");
-  el.className = "rounded-xl bg-white shadow-sm p-4 ring-1 ring-ink-100";
+function tile({ label, value, accent, onClick }) {
+  const el = document.createElement(onClick ? "button" : "div");
+  el.className = "text-left rounded-xl bg-white shadow-sm p-4 ring-1 ring-ink-100" +
+    (onClick ? " hover:ring-accent-300 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 transition cursor-pointer" : "");
   el.innerHTML = `
     <div class="text-xs uppercase tracking-wider text-ink-500 font-medium">${label}</div>
     <div class="mt-1 text-2xl md:text-3xl font-semibold ${accent || "text-ink-900"} tabular-nums count-up" data-target="${value}">0</div>
   `;
+  if (onClick) {
+    el.type = "button";
+    el.addEventListener("click", onClick);
+  }
   return el;
 }
 
@@ -36,7 +43,12 @@ export function renderStatsBar(listings) {
   wrap.className = "grid grid-cols-2 md:grid-cols-4 gap-3";
   wrap.append(
     tile({ label: "Listings", value: stats.total }),
-    tile({ label: "Live auctions", value: stats.live, accent: "text-emerald-700" }),
+    tile({
+      label: "Live bidding auctions",
+      value: stats.live,
+      accent: "text-emerald-700",
+      onClick: () => patchFilters({ auctionType: "Online Auction" }),
+    }),
     tile({ label: "Ending in 24h", value: stats.endingSoon, accent: "text-amber-700" }),
     tile({ label: "Total bids", value: stats.bids }),
   );

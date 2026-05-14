@@ -34,6 +34,19 @@
 html, body { height: 100%; }
 body { overflow-y: scroll; } /* prevent layout jump on short pages */
 
+/* Desktop density tweak: scale every rem-based utility based on viewport
+   width (STYLE-04, supersedes STYLE-03). Auto-adapts so the 3-column
+   detail layout fits on narrower laptops without wrapping.
+   Mobile (<768px) keeps 100% so touch targets and readability stay intact.
+   Anchor points (rendered at 16px default):
+     ~1280px viewport → ~68%
+     ~1366px viewport → ~72%
+     ~1600px viewport → ~80%
+     ~1920px viewport → ~95% (capped) */
+@media (min-width: 768px) {
+  html { font-size: clamp(65%, 0.7vw + 2px, 95%); }
+}
+
 /* Custom focus ring color (matches accent) */
 *:focus-visible {
   outline-offset: 2px;

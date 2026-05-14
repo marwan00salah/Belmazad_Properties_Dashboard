@@ -19,6 +19,20 @@ Internal operations dashboard for Belmazad personnel to monitor live property li
 
 ## Updates
 
+### v1.1 — Detail polish + EN/AR groundwork (2026-05-14)
+
+**Listings page**
+- **Live bidding auctions** stat tile now counts only in-progress *Online Auction* listings (renamed from "Live auctions") and is clickable to filter the grid
+
+**Detail view**
+- **Description** moved into a collapsible disclosure inside the hero card — starts collapsed, click to expand. Listings with Arabic content show an `EN | AR` toggle that fades in on expand and flips the body to RTL Arabic without a page navigation
+- **Commercial terms** section folded into Offers / Bidding — Payment terms and Price modifier now sit alongside the bid/offer rows
+- **Back to listings** promoted to a visible pill button
+- 4th hero action button relabeled from "Download" to **Photos** (icon unchanged)
+
+**Layout & density**
+- Desktop now auto-scales density to viewport width so the 3-column detail layout fits comfortably on narrower laptops without manual zoom
+
 ### v1.0 — Initial public release (2026-05-13)
 
 **Listings page**

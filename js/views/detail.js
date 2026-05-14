@@ -89,10 +89,12 @@ export function renderDetail(propertyId) {
   const nav = document.createElement("nav");
   nav.className = "flex items-center justify-between gap-2 text-sm";
 
+  // DETAIL-20: pill-styled back link so it reads as a primary nav button,
+  // not a muted inline link.
   const back = document.createElement("a");
   back.href = "#/";
-  back.className = "inline-flex items-center gap-1 text-ink-600 hover:text-ink-900 transition";
-  back.innerHTML = `<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12.78 5.22a.75.75 0 010 1.06L9.06 10l3.72 3.72a.75.75 0 11-1.06 1.06l-4.25-4.25a.75.75 0 010-1.06l4.25-4.25a.75.75 0 011.06 0z" clip-rule="evenodd"/></svg> Back to listings`;
+  back.className = "inline-flex items-center gap-1.5 rounded-lg bg-white ring-1 ring-ink-200 hover:bg-ink-50 hover:ring-ink-300 hover:text-ink-900 transition px-3 py-1.5 text-ink-700 font-medium shadow-sm";
+  back.innerHTML = `<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M12.78 5.22a.75.75 0 010 1.06L9.06 10l3.72 3.72a.75.75 0 11-1.06 1.06l-4.25-4.25a.75.75 0 010-1.06l4.25-4.25a.75.75 0 011.06 0z" clip-rule="evenodd"/></svg> Back to listings`;
 
   const externals = document.createElement("div");
   externals.className = "flex items-center gap-2";
@@ -151,6 +153,10 @@ export function renderDetail(propertyId) {
   const actionsRow = buildActionsRow(listing);
 
   heroBody.append(title, addr, actionsRow);
+  // DETAIL-18: collapsible description (with optional EN/AR toggle) lives
+  // inside the hero card, directly below the actions row. Starts collapsed.
+  const descDisclosure = buildDescriptionDisclosure(listing);
+  if (descDisclosure) heroBody.appendChild(descDisclosure);
   hero.appendChild(heroBody);
   center.appendChild(hero);
 
@@ -169,6 +175,10 @@ export function renderDetail(propertyId) {
   const isOffer = listing.auctionType === "Make An Offer";
   const sectionTitle = isOffer ? "Offers" : "Bidding";
 
+  // DETAIL-17: Payment terms + Price modifier moved here from the
+  // (now-removed) Commercial terms section.
+  const priceMod = decode("priceModifier", listing.priceModifier);
+
   const offersSection = section(sectionTitle, [
     [isOffer ? "Starting offer"      : "Start bid",         money(listing.start_bid, listing.CURRENCY_SYMBOL || listing.CURRENCY_CODE)],
     [isOffer ? "Highest offer"       : "Current bid",       money(listing.current_bid, listing.CURRENCY_SYMBOL || listing.CURRENCY_CODE)],
@@ -179,6 +189,8 @@ export function renderDetail(propertyId) {
     [isOffer ? "Total offers"        : "Total bids",        formatNumber(listing.no_of_bids)],
     [isOffer ? "Highest offerer ID"  : "Highest bidder ID", listing.highestBidder ? `#${listing.highestBidder}` : null],
     ["Sold amount",                                         isTrue(listing.propertySold) ? money(listing.soldAmount, listing.CURRENCY_SYMBOL || listing.CURRENCY_CODE) : null],
+    ["Payment terms",                                       decode("purchaseStatus", listing.purchaseStatus)],
+    ["Price modifier",                                      priceMod && priceMod !== "None" ? priceMod : null],
   ]);
   // Side rails use a single-column dl layout (narrower than the center)
   offersSection.querySelector("dl")?.classList.remove("sm:grid-cols-2");
@@ -214,34 +226,9 @@ export function renderDetail(propertyId) {
   ]);
   specsSection.querySelector("dl")?.classList.remove("sm:grid-cols-2");
 
-  const priceMod = decode("priceModifier", listing.priceModifier);
-  const commercialSection = section("Commercial terms", [
-    ["Payment terms",  decode("purchaseStatus", listing.purchaseStatus)],
-    ["Price modifier", priceMod && priceMod !== "None" ? priceMod : null],
-  ]);
-  // Left rail width → stack vertically (DETAIL-07).
-  commercialSection.querySelector("dl")?.classList.remove("sm:grid-cols-2");
-
-  // DETAIL-16: prefer the rich HTML description (sanitized); fall back to the plain text.
-  const richHtml = sanitizeDescriptionHtml(listing.propertyDescription || "");
-  const fallbackText = (listing.cleanPropertyDescription || "").trim();
-  let descriptionSection = null;
-  if (richHtml || fallbackText) {
-    descriptionSection = document.createElement("section");
-    descriptionSection.className = "rounded-xl bg-white shadow-sm ring-1 ring-ink-100 p-5 md:p-6";
-    const h = document.createElement("h2");
-    h.className = "text-sm font-semibold text-ink-500 uppercase tracking-wider mb-3";
-    h.textContent = "Description";
-    const body = document.createElement("div");
-    body.className = "prose prose-sm max-w-none text-ink-800 leading-relaxed";
-    if (richHtml) {
-      body.innerHTML = richHtml;
-    } else {
-      body.classList.add("whitespace-pre-wrap");
-      body.textContent = fallbackText;
-    }
-    descriptionSection.append(h, body);
-  }
+  // DETAIL-18: description moved out of the center column into a
+  // collapsible disclosure inside the hero card (see buildDescriptionDisclosure
+  // below). The old standalone section block has been removed.
 
   const sellerName = [listing.firstName, listing.middleName, listing.lastName].filter(Boolean).join(" ").trim();
   const sellerSection = section("Seller / Agent", [
@@ -280,8 +267,10 @@ export function renderDetail(propertyId) {
   }
 
   // ── Populate the three independent containers (DETAIL-06) ──────────────
-  // Right rail: Timing → Offers → Commercial terms (DETAIL-07 / DETAIL-08).
-  rightRail.append(timingSection, offersSection, commercialSection);
+  // Right rail: Timing → Offers (DETAIL-08). Commercial terms section
+  // removed in DETAIL-17; Payment terms + Price modifier now live inside
+  // the Offers/Bidding dl.
+  rightRail.append(timingSection, offersSection);
 
   // Left rail: Seller/Agent → Specifications (DETAIL-10).
   leftRail.append(sellerSection, specsSection);
@@ -289,7 +278,7 @@ export function renderDetail(propertyId) {
   // Center: nav + hero already appended above. Now everything else.
   // (DETAIL-11 removed Status & flags; Property ID + Featured moved to Specs.)
   // (DETAIL-12 inlined Media into the hero card.)
-  if (descriptionSection) center.appendChild(descriptionSection);
+  // (DETAIL-18 moved Description into the hero card as a disclosure.)
   if (lawyersSection)     center.appendChild(lawyersSection);
   if (bankSection)        center.appendChild(bankSection);
 
@@ -373,6 +362,124 @@ function sanitizeDescriptionHtml(input) {
     }
   })(root);
   return root.innerHTML;
+}
+
+// DETAIL-18: collapsible Description disclosure that sits inside the hero
+// card, directly under the actions row. Starts collapsed.
+// - Header is a single full-width button with centered "Description ▾" text;
+//   the whole row is pressable and darkens on hover to signal that.
+// - When expanded, an EN | AR segmented toggle fades in on the right
+//   (absolute-positioned sibling of the trigger so its clicks don't toggle
+//   the disclosure). Only present when both EN and AR descriptions exist.
+// - Body uses the existing sanitizeDescriptionHtml + prose styling.
+//   Smooth height animation via the grid-template-rows 0fr→1fr trick.
+function buildDescriptionDisclosure(listing) {
+  const richEn     = sanitizeDescriptionHtml(listing.propertyDescription || "");
+  const fallbackEn = (listing.cleanPropertyDescription || "").trim();
+  const richAr     = sanitizeDescriptionHtml(listing.arabicpropertyDescription || "");
+  const hasEn      = !!(richEn || fallbackEn);
+  const hasAr      = !!richAr;
+  if (!hasEn && !hasAr) return null;
+
+  const wrap = document.createElement("div");
+  wrap.className = "mt-4 border-t border-ink-100 pt-2";
+
+  // Header row: full-width press target with the segmented toggle floated
+  // absolutely on the right so it doesn't intercept the disclosure click.
+  const headerWrap = document.createElement("div");
+  headerWrap.className = "relative";
+
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.setAttribute("aria-expanded", "false");
+  trigger.className = "w-full inline-flex items-center justify-center gap-1.5 rounded-lg py-2.5 text-sm font-medium text-ink-700 hover:bg-ink-100 hover:text-ink-900 transition";
+  trigger.innerHTML = `<span>Description</span><svg class="chevron transition-transform duration-200" width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.06l3.71-3.83a.75.75 0 011.08 1.04l-4.25 4.39a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>`;
+  headerWrap.appendChild(trigger);
+
+  // Default language: EN if available, otherwise AR (the only case where
+  // we'd skip the toggle entirely and just show AR).
+  let lang = hasEn ? "en" : "ar";
+
+  const segBase     = "px-2 py-0.5 rounded transition text-xs font-semibold";
+  const segActive   = "bg-white text-ink-900 shadow-sm";
+  const segInactive = "text-ink-500 hover:text-ink-800";
+  let seg = null, enBtn = null, arBtn = null;
+  if (hasEn && hasAr) {
+    seg = document.createElement("div");
+    seg.className = "absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center rounded-md bg-ink-100 p-0.5 opacity-0 pointer-events-none transition-opacity duration-200";
+    seg.setAttribute("aria-hidden", "true");
+    enBtn = document.createElement("button");
+    arBtn = document.createElement("button");
+    enBtn.type = "button"; arBtn.type = "button";
+    enBtn.textContent = "EN"; arBtn.textContent = "AR";
+    enBtn.className = `${segBase} ${segActive}`;
+    arBtn.className = `${segBase} ${segInactive}`;
+    seg.append(enBtn, arBtn);
+    headerWrap.appendChild(seg);
+  }
+
+  const collapse = document.createElement("div");
+  collapse.className = "grid grid-rows-[0fr] transition-[grid-template-rows] duration-200 ease-out";
+  const collapseInner = document.createElement("div");
+  collapseInner.className = "overflow-hidden min-h-0";
+
+  const body = document.createElement("div");
+  body.className = "prose prose-sm max-w-none text-ink-800 leading-relaxed pt-3";
+
+  function renderBody() {
+    body.classList.remove("whitespace-pre-wrap");
+    body.innerHTML = "";
+    if (lang === "ar" && hasAr) {
+      body.setAttribute("dir", "rtl");
+      body.setAttribute("lang", "ar");
+      body.innerHTML = richAr;
+    } else {
+      body.setAttribute("dir", "ltr");
+      body.setAttribute("lang", "en");
+      if (richEn) {
+        body.innerHTML = richEn;
+      } else {
+        body.classList.add("whitespace-pre-wrap");
+        body.textContent = fallbackEn;
+      }
+    }
+  }
+  renderBody();
+
+  function setLang(next) {
+    if (next === lang) return;
+    lang = next;
+    if (enBtn && arBtn) {
+      enBtn.className = `${segBase} ${lang === "en" ? segActive : segInactive}`;
+      arBtn.className = `${segBase} ${lang === "ar" ? segActive : segInactive}`;
+    }
+    renderBody();
+  }
+  if (enBtn) enBtn.addEventListener("click", (e) => { e.stopPropagation(); setLang("en"); });
+  if (arBtn) arBtn.addEventListener("click", (e) => { e.stopPropagation(); setLang("ar"); });
+
+  collapseInner.appendChild(body);
+  collapse.appendChild(collapseInner);
+  wrap.append(headerWrap, collapse);
+
+  let open = false;
+  trigger.addEventListener("click", () => {
+    open = !open;
+    trigger.setAttribute("aria-expanded", String(open));
+    collapse.classList.toggle("grid-rows-[0fr]", !open);
+    collapse.classList.toggle("grid-rows-[1fr]", open);
+    const chev = trigger.querySelector(".chevron");
+    if (chev) chev.style.transform = open ? "rotate(180deg)" : "";
+    if (seg) {
+      seg.classList.toggle("opacity-0", !open);
+      seg.classList.toggle("pointer-events-none", !open);
+      seg.classList.toggle("opacity-100", open);
+      seg.classList.toggle("pointer-events-auto", open);
+      seg.setAttribute("aria-hidden", String(!open));
+    }
+  });
+
+  return wrap;
 }
 
 // DETAIL-15: flip a section() node to the negative (inverted) palette in-place.
@@ -477,9 +584,10 @@ function buildActionsRow(listing) {
       palette: "bg-red-600 hover:bg-red-700",
       icon:    ACTION_ICONS.yt,
     }),
-    // WORKER-01: gallery zip download.
+    // WORKER-01: gallery zip download. Label says "Photos" (DETAIL-19);
+    // the download arrow icon already conveys the action.
     actionButton({
-      label:   "Download",
+      label:   "Photos",
       url:     galleryZipUrl,
       palette: "bg-ink-700 hover:bg-ink-800",
       icon:    ACTION_ICONS.download,
