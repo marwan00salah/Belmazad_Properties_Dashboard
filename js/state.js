@@ -14,6 +14,9 @@ const initial = {
   },
   sort: DEFAULT_SORT,
   route: { name: "listings", params: {} },
+  // WORKER-05: populated by fetchWhoAmI() after first listings load.
+  userEmail: null,
+  isOperator: false,
 };
 
 let state = initial;

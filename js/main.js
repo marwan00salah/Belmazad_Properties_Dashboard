@@ -1,4 +1,4 @@
-import { fetchListings, AuthRequiredError } from "./api.js";
+import { fetchListings, AuthRequiredError, fetchWhoAmI } from "./api.js";
 import { getState, setState, subscribe } from "./state.js";
 import { initRouter, navigate } from "./router.js";
 import { renderListings } from "./views/listings.js";
@@ -101,6 +101,14 @@ async function refresh() {
   try {
     const { listings } = await fetchListings();
     setState({ listings, loading: false, lastUpdated: Date.now() });
+    // WORKER-05: identity probe — runs after a successful listings fetch so
+    // we know the CF Access session is alive. Result decides whether the
+    // Initiate-auction button renders in the detail view.
+    if (getState().userEmail == null) {
+      fetchWhoAmI().then(({ email, operator }) => {
+        setState({ userEmail: email, isOperator: operator });
+      });
+    }
   } catch (err) {
     setState({
       loading: false,

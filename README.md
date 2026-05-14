@@ -19,6 +19,17 @@ Internal operations dashboard for Belmazad personnel to monitor live property li
 
 ## Updates
 
+### v1.1.1 — Operator-only Initiate auction (2026-05-14)
+
+**Detail view**
+- New **Initiate auction** action in the Timing rail, visible only to allow-listed operators. Proxied through the Cloudflare Worker so the upstream operator API key never reaches the browser.
+- Confirm modal requires the operator to type the property ID before the request can fire — guard against accidental clicks (the upstream action is one-way and sends real countdown emails).
+- After a successful initiate, the tile flips to a sticky **"✓ Auction initiated"** state with the `master_task_id` and a one-click copy button. The state persists per-browser via `localStorage`.
+
+**Backend (Cloudflare Worker)**
+- `GET /whoami` — lightweight identity probe (returns the CF Access email + operator flag). Lets the dashboard conditionally render operator-only UI without exposing any allow-list to the public.
+- `POST /auction/initiate` — operator-gated proxy to the upstream buyer-pipeline API. Validates origin + email + payload (`property_id` format, `auction_start_date` parseability and future-ness) before forwarding with the encrypted operator key from Worker env.
+
 ### v1.1 — Detail polish + EN/AR groundwork (2026-05-14)
 
 **Listings page**

@@ -4,6 +4,7 @@ import { decode } from "../lookups.js";
 import { statusBadge, listingStatusKinds } from "../components/statusBadge.js";
 import { subscribeCountdown } from "../countdown.js";
 import { getState } from "../state.js";
+import { initiateAuction } from "../api.js";
 
 function section(title, rows) {
   const wrap = document.createElement("section");
@@ -328,6 +329,17 @@ export function renderDetail(propertyId) {
     }
   });
 
+  // WORKER-05: operator-only "Initiate auction" control at the bottom of
+  // the Timing section. State.isOperator is set by fetchWhoAmI() after the
+  // first listings fetch; render() re-runs on state change so the control
+  // appears the moment we learn the user is an operator.
+  // DETAIL-21: the control internally checks localStorage to render either
+  // the active button or a disabled "already initiated" tile.
+  if (getState().isOperator) {
+    const initiateControl = buildInitiateAuctionControl(listing, startMs);
+    if (initiateControl) timingSection.appendChild(initiateControl);
+  }
+
   root.__cleanup = () => { unsubscribe(); unsubscribeTiming(); };
   return root;
 }
@@ -480,6 +492,280 @@ function buildDescriptionDisclosure(listing) {
   });
 
   return wrap;
+}
+
+// DETAIL-21: localStorage helpers for tracking which properties this browser
+// has already initiated. Per-browser, per-device — sufficient at ~14
+// initiations/month from a single operator on a single laptop.
+const INITIATED_KEY_PREFIX = "belmazad:initiated:";
+function readInitiated(propertyId) {
+  try {
+    const raw = localStorage.getItem(INITIATED_KEY_PREFIX + propertyId);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    return obj && typeof obj === "object" ? obj : null;
+  } catch { return null; }
+}
+function writeInitiated(propertyId, masterTaskId) {
+  try {
+    localStorage.setItem(
+      INITIATED_KEY_PREFIX + propertyId,
+      JSON.stringify({ master_task_id: masterTaskId || "", at: Date.now() }),
+    );
+  } catch { /* private mode / quota — silent */ }
+}
+
+// WORKER-05 + DETAIL-21: Initiate-auction control rendered at the bottom of
+// the Timing section for operators. Inverted palette so it visually matches
+// the live countdown tile above. Renders one of three states:
+//   • already initiated (localStorage) → "✓ Auction initiated" tile + reset link
+//   • disabled (no future startBidding) → grayed button with tooltip
+//   • active → "Initiate auction" button that opens the confirm modal
+function buildInitiateAuctionControl(listing, startMs) {
+  const wrap = document.createElement("div");
+  wrap.className = "mt-4 rounded-lg bg-ink-900 ring-1 ring-ink-800 p-3";
+  paintInitiateControl(wrap, listing, startMs);
+  return wrap;
+}
+
+function paintInitiateControl(wrap, listing, startMs) {
+  wrap.innerHTML = "";
+  const propertyId = String(listing.propertyId || "");
+
+  const heading = document.createElement("div");
+  heading.className = "text-[10px] uppercase tracking-wider text-ink-300 font-semibold mb-2";
+  heading.textContent = "Operator actions";
+  wrap.appendChild(heading);
+
+  const prior = readInitiated(propertyId);
+  if (prior) {
+    const done = document.createElement("div");
+    done.className = "rounded-md bg-emerald-950 ring-1 ring-emerald-800 px-3 py-2 text-sm font-semibold text-emerald-300 inline-flex items-center gap-1.5 w-full justify-center";
+    done.innerHTML = `<svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.7 5.7a1 1 0 010 1.4l-7 7a1 1 0 01-1.4 0l-3-3a1 1 0 011.4-1.4L9 12l6.3-6.3a1 1 0 011.4 0z" clip-rule="evenodd"/></svg> <span>Auction initiated</span>`;
+    wrap.appendChild(done);
+
+    if (prior.master_task_id) {
+      const meta = document.createElement("div");
+      meta.className = "mt-1.5 flex items-center gap-1.5 text-[10px] text-ink-400";
+      const taskLabel = document.createElement("span");
+      taskLabel.textContent = "task:";
+      const taskValue = document.createElement("span");
+      taskValue.className = "font-mono text-ink-300 truncate flex-1";
+      taskValue.title = prior.master_task_id;
+      taskValue.textContent = prior.master_task_id;
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.title = "Copy task ID";
+      copyBtn.className = "text-ink-300 hover:text-white transition shrink-0";
+      copyBtn.innerHTML = `<svg width="11" height="11" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M7 3a2 2 0 00-2 2v1H4a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-1h1a2 2 0 002-2V5a2 2 0 00-2-2H7zm0 2h8v8h-1V8a2 2 0 00-2-2H7V5zM4 8h8v8H4V8z"/></svg>`;
+      copyBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(prior.master_task_id);
+          const originalHtml = copyBtn.innerHTML;
+          copyBtn.textContent = "✓";
+          setTimeout(() => { copyBtn.innerHTML = originalHtml; }, 1200);
+        } catch { /* silent */ }
+      });
+      meta.append(taskLabel, taskValue, copyBtn);
+      wrap.appendChild(meta);
+    }
+    return;
+  }
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M11 1.5l-7.5 9h5l-1 8 8-10h-5l.5-7z"/></svg> <span>Initiate auction</span>`;
+
+  const disabledReason =
+    startMs == null            ? "Start time not set on this listing." :
+    startMs <= Date.now()      ? "Start time has already passed."      :
+    null;
+
+  if (disabledReason) {
+    btn.disabled = true;
+    btn.className = "w-full inline-flex items-center justify-center gap-1.5 rounded-md bg-ink-800 text-ink-500 px-3 py-2 text-sm font-semibold ring-1 ring-ink-700 cursor-not-allowed";
+    btn.title = disabledReason;
+  } else {
+    btn.className = "w-full inline-flex items-center justify-center gap-1.5 rounded-md bg-ink-800 hover:bg-ink-700 text-white px-3 py-2 text-sm font-semibold ring-1 ring-ink-700 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500";
+    btn.addEventListener("click", () => openInitiateAuctionModal(listing, () => paintInitiateControl(wrap, listing, startMs)));
+  }
+
+  wrap.appendChild(btn);
+}
+
+function openInitiateAuctionModal(listing, onSuccess) {
+  const propertyId = String(listing.propertyId || "");
+  const rawStart   = listing.startBidding;
+  const startDate  = rawStart ? new Date(String(rawStart).replace(" ", "T")) : null;
+  const validStart = startDate && !Number.isNaN(startDate.getTime());
+  const startIso   = validStart ? startDate.toISOString() : null;
+  const startLocal = validStart ? startDate.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }) : "—";
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 fade-in";
+  backdrop.setAttribute("role", "dialog");
+  backdrop.setAttribute("aria-modal", "true");
+  backdrop.setAttribute("aria-labelledby", "initiate-auction-title");
+
+  const modal = document.createElement("div");
+  modal.className = "w-full max-w-md rounded-xl bg-white shadow-2xl ring-1 ring-ink-200 p-5 md:p-6 space-y-4";
+
+  const title = document.createElement("h2");
+  title.id = "initiate-auction-title";
+  title.className = "text-base font-semibold text-ink-900";
+  title.textContent = "Initiate auction";
+
+  const meta = document.createElement("dl");
+  meta.className = "rounded-lg bg-ink-50 ring-1 ring-ink-100 p-3 text-sm space-y-1.5";
+  meta.innerHTML = `
+    <div class="flex justify-between gap-3"><dt class="text-ink-500">Property</dt><dd class="text-ink-900 font-medium text-right">${escapeHtml(listing.propertyName || "—")}</dd></div>
+    <div class="flex justify-between gap-3"><dt class="text-ink-500">Property ID</dt><dd class="text-ink-900 font-mono text-right">${escapeHtml(propertyId)}</dd></div>
+    <div class="flex justify-between gap-3"><dt class="text-ink-500">Start time</dt><dd class="text-ink-900 text-right">${escapeHtml(startLocal)}</dd></div>`;
+
+  const warning = document.createElement("p");
+  warning.className = "text-xs text-urgent bg-red-50 ring-1 ring-red-100 rounded-md p-2.5";
+  warning.textContent = "This sends real countdown emails to all qualified contacts. There is no undo.";
+
+  const labelWrap = document.createElement("div");
+  const label = document.createElement("label");
+  label.className = "block text-xs text-ink-700 font-medium";
+  label.innerHTML = `Type the property ID <span class="font-mono text-ink-900">${escapeHtml(propertyId)}</span> to confirm:`;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.inputMode = "numeric";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.className = "mt-1 w-full rounded-md border border-ink-200 px-3 py-2 text-sm font-mono focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100 transition";
+  label.htmlFor = "initiate-auction-input";
+  input.id = "initiate-auction-input";
+  labelWrap.append(label, input);
+
+  const errorMsg = document.createElement("p");
+  errorMsg.className = "hidden text-xs text-urgent";
+
+  const actions = document.createElement("div");
+  actions.className = "flex items-center justify-end gap-2 pt-1";
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "rounded-lg px-3 py-1.5 text-sm font-medium text-ink-700 hover:bg-ink-100 transition";
+  cancelBtn.textContent = "Cancel";
+
+  const confirmBtn = document.createElement("button");
+  confirmBtn.type = "button";
+  confirmBtn.disabled = true;
+  confirmBtn.className = "rounded-lg bg-urgent text-white px-3 py-1.5 text-sm font-semibold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed enabled:hover:bg-red-600";
+  confirmBtn.textContent = "Initiate";
+
+  actions.append(cancelBtn, confirmBtn);
+  modal.append(title, meta, warning, labelWrap, errorMsg, actions);
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+
+  function close() {
+    backdrop.remove();
+    document.removeEventListener("keydown", onKey);
+  }
+  function onKey(e) {
+    if (e.key === "Escape") close();
+  }
+  cancelBtn.addEventListener("click", close);
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  document.addEventListener("keydown", onKey);
+  let sending = false;
+  // Gate so a retype while in-flight doesn't accidentally re-enable the button.
+  input.addEventListener("input", () => {
+    if (sending) return;
+    confirmBtn.disabled = input.value.trim() !== propertyId;
+    errorMsg.classList.add("hidden");
+  });
+
+  confirmBtn.addEventListener("click", async () => {
+    if (sending) return;
+    if (!startIso) {
+      errorMsg.textContent = "Start time is missing — cannot initiate.";
+      errorMsg.classList.remove("hidden");
+      return;
+    }
+    sending = true;
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = "Sending…";
+    input.disabled = true;
+    cancelBtn.disabled = true;
+    errorMsg.classList.add("hidden");
+
+    const result = await initiateAuction({ property_id: propertyId, auction_start_date: startIso });
+
+    if (result.ok) {
+      const taskId = result.data?.master_task_id || result.data?.task_id || "";
+      // DETAIL-21: persist the initiated state so the button switches to the
+      // "already initiated" tile next time this property is opened.
+      writeInitiated(propertyId, taskId);
+      if (typeof onSuccess === "function") {
+        try { onSuccess(); } catch {}
+      }
+
+      const success = document.createElement("div");
+      success.className = "rounded-lg bg-emerald-50 ring-1 ring-emerald-200 p-3 text-sm text-emerald-800";
+      const headline = document.createElement("div");
+      headline.className = "font-semibold";
+      headline.textContent = "Auction initiation queued.";
+      success.appendChild(headline);
+      if (taskId) {
+        const row = document.createElement("div");
+        row.className = "mt-1 flex items-center gap-1.5 text-xs";
+        const lbl = document.createElement("span");
+        lbl.textContent = "master_task_id:";
+        const val = document.createElement("span");
+        val.className = "font-mono truncate flex-1";
+        val.title = taskId;
+        val.textContent = taskId;
+        const copyBtn = document.createElement("button");
+        copyBtn.type = "button";
+        copyBtn.title = "Copy task ID";
+        copyBtn.className = "shrink-0 text-emerald-700 hover:text-emerald-900 transition";
+        copyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M7 3a2 2 0 00-2 2v1H4a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-1h1a2 2 0 002-2V5a2 2 0 00-2-2H7zm0 2h8v8h-1V8a2 2 0 00-2-2H7V5zM4 8h8v8H4V8z"/></svg>`;
+        copyBtn.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(taskId);
+            const originalHtml = copyBtn.innerHTML;
+            copyBtn.textContent = "✓";
+            setTimeout(() => { copyBtn.innerHTML = originalHtml; }, 1200);
+          } catch { /* silent */ }
+        });
+        row.append(lbl, val, copyBtn);
+        success.appendChild(row);
+      }
+
+      modal.innerHTML = "";
+      const closeBtn = document.createElement("button");
+      closeBtn.type = "button";
+      closeBtn.className = "rounded-lg bg-accent-700 hover:bg-accent-800 text-white px-3 py-1.5 text-sm font-semibold shadow-sm transition";
+      closeBtn.textContent = "Close";
+      closeBtn.addEventListener("click", close);
+      const successActions = document.createElement("div");
+      successActions.className = "flex justify-end pt-2";
+      successActions.appendChild(closeBtn);
+      modal.append(title, success, successActions);
+      return;
+    }
+
+    // Failure (or network rejection) — surface the error and let the operator retry.
+    const msg = result.data?.error || result.data?.detail || `Request failed (${result.status})`;
+    errorMsg.textContent = msg;
+    errorMsg.classList.remove("hidden");
+    sending = false;
+    input.disabled = false;
+    cancelBtn.disabled = false;
+    confirmBtn.disabled = input.value.trim() !== propertyId;
+    confirmBtn.textContent = "Initiate";
+  });
+
+  input.focus();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
 // DETAIL-15: flip a section() node to the negative (inverted) palette in-place.

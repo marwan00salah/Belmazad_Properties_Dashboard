@@ -39,6 +39,46 @@ export async function fetchListings({ page } = {}) {
   return { listings: list, pagnation: json.pagnation ?? null };
 }
 
+// WORKER-05: identity probe — tells the dashboard whether the current CF Access
+// user is on the operator allow-list. Used to conditionally render the
+// Initiate-auction button. Server-side checks on /auction/initiate are the
+// real gate; this is cosmetic.
+export async function fetchWhoAmI() {
+  try {
+    const res = await fetch(new URL("whoami", WORKER_URL).toString(), {
+      method: "GET",
+      headers: { "Accept": "application/json" },
+      credentials: "include",
+    });
+    if (!res.ok) return { email: null, operator: false };
+    const json = await res.json();
+    return { email: json.email || null, operator: !!json.operator };
+  } catch {
+    return { email: null, operator: false };
+  }
+}
+
+// WORKER-05: operator-only proxy to the buyer-pipeline auction initiate
+// endpoint. Always returns { ok, status, data } — never throws — so the
+// modal's click handler can always render either the success payload or
+// an inline error without dealing with promise rejection.
+export async function initiateAuction({ property_id, auction_start_date }) {
+  let res;
+  try {
+    res = await fetch(new URL("auction/initiate", WORKER_URL).toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ property_id, auction_start_date }),
+    });
+  } catch (e) {
+    return { ok: false, status: 0, data: { error: "Network error — couldn't reach the worker. Check CORS / CF Access." } };
+  }
+  let data = null;
+  try { data = await res.json(); } catch {}
+  return { ok: res.ok, status: res.status, data };
+}
+
 // Probe to see whether the API actually paginates. Called once at startup.
 // Returns true if page 2 returns a different first listing than page 1.
 export async function probePagination(firstListings) {
