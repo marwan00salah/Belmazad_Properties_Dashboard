@@ -17,6 +17,10 @@ const initial = {
   // WORKER-05: populated by fetchWhoAmI() after first listings load.
   userEmail: null,
   isOperator: false,
+  // WORKER-06/DETAIL-22: per-property HubSpot report cache, keyed by
+  // propertyId → { status, data?, computedAt?, startedAt?, triggeredBy?,
+  // cooldownRemainingMs?, polling? }. Hydrated lazily from KV on detail open.
+  propertyReports: {},
 };
 
 let state = initial;
@@ -33,6 +37,16 @@ export function setState(patch) {
 
 export function patchFilters(patch) {
   setState({ filters: { ...state.filters, ...patch } });
+}
+
+// DETAIL-22: shallow-merge a patch into one property's report slice and
+// notify subscribers (drives the report-card re-render via subscribe(render)).
+export function setPropertyReport(propertyId, patch) {
+  const id = String(propertyId);
+  const prev = state.propertyReports[id] || {};
+  setState({
+    propertyReports: { ...state.propertyReports, [id]: { ...prev, ...patch } },
+  });
 }
 
 export function resetFilters() {

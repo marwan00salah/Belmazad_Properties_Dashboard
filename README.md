@@ -19,6 +19,16 @@ Internal operations dashboard for Belmazad personnel to monitor live property li
 
 ## Updates
 
+### v1.2 — Per-property HubSpot reports (2026-05-16)
+
+**Detail view**
+- New **HubSpot reports** card on each property page: total contacts, deals, and open tasks; leads broken down into 10 status buckets; deals broken down by pipeline stage.
+- Page load shows the last computed snapshot instantly. A **Generate / Refresh reports** button recomputes on demand — shared for everyone, with a short global per-property cooldown (live `m:ss` countdown) and de-duplication so concurrent clicks don't double-run.
+- Footer shows when the report was last refreshed and by whom.
+
+**Backend**
+- Heavy HubSpot aggregation is offloaded to an external automation workflow and cached per property; the dashboard and proxy stay lightweight. Reports are scoped to each property precisely (by deal name and the lead-status segmentation), matching how the team scopes them in HubSpot.
+
 ### v1.1.1 — Operator-only Initiate auction (2026-05-14)
 
 **Detail view**

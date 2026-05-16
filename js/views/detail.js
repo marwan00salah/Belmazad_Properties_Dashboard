@@ -1,10 +1,10 @@
 import { IMAGE_BASE_URL, PLACEHOLDER_IMAGE, WORKER_URL } from "../config.js";
 import { money, formatNumber, formatDate, formatDateTime, timeUntil, daysSince, isTrue } from "../format.js";
-import { decode } from "../lookups.js";
+import { decode, HS_LEAD_STATUS_BUCKET_LABELS } from "../lookups.js";
 import { statusBadge, listingStatusKinds } from "../components/statusBadge.js";
 import { subscribeCountdown } from "../countdown.js";
-import { getState } from "../state.js";
-import { initiateAuction } from "../api.js";
+import { getState, setPropertyReport } from "../state.js";
+import { initiateAuction, fetchPropertyReport, triggerPropertyReportRefresh } from "../api.js";
 
 function section(title, rows) {
   const wrap = document.createElement("section");
@@ -282,6 +282,9 @@ export function renderDetail(propertyId) {
   // (DETAIL-18 moved Description into the hero card as a disclosure.)
   if (lawyersSection)     center.appendChild(lawyersSection);
   if (bankSection)        center.appendChild(bankSection);
+
+  // DETAIL-22: per-property HubSpot reports card (n8n-backed; see WORKER-06).
+  center.appendChild(buildHubSpotReportSection(listing));
 
   // DETAIL-09: live "Starts in / Ends in" tile at the top of the Timing
   // section, styled with a negative (inverted) palette — dark background,
@@ -779,6 +782,272 @@ function applyNegativePalette(node) {
   for (const dd of node.querySelectorAll("dd")) {
     dd.className = "text-sm text-white";
   }
+}
+
+// ── DETAIL-22: HubSpot reports card ──────────────────────────────────────
+// Async model (WORKER-06): the card hydrates from the Worker's shared KV
+// cache; Refresh asks the Worker to (maybe) trigger an n8n recompute, then
+// the card polls KV until the result lands. State lives in
+// state.propertyReports[id]; the poll timer lives module-scoped (outside the
+// DOM) because main.js render() tears down + rebuilds the whole tree on
+// every setState — a node-attached timer would be orphaned each re-render.
+
+const reportPollers = new Map();   // propertyId → setTimeout handle
+const reportHydrating = new Set(); // propertyId → lazy KV read in flight
+const REPORT_POLL_FIRST_MS = 1500; // snappy first check (n8n often ~6 s)
+const REPORT_POLL_MS = 3000;
+const REPORT_POLL_MAX = 60;        // ~3 min ceiling
+
+function relativeFromNow(ts) {
+  const sec = Math.floor((Date.now() - ts) / 1000);
+  if (sec < 30) return "just now";
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  return `${day}d ago`;
+}
+
+// "marwan.salah@x.com" → "Marwan Salah"; falls back to local part, then raw.
+function titleCaseFromEmail(email) {
+  if (!email) return "—";
+  const raw = String(email);
+  const local = raw.split("@")[0] || raw;
+  const tokens = local.split(/[._+\-]+/).filter(Boolean);
+  if (!tokens.length) return local || raw;
+  return tokens.map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
+}
+
+function reportProvenance(slice) {
+  if (!slice) return null;
+  const who = slice.triggeredBy ? titleCaseFromEmail(slice.triggeredBy) : null;
+  const when = Number.isFinite(slice.computedAt) ? relativeFromNow(slice.computedAt) : null;
+  if (when && who) return `Refreshed ${when}, by ${who}`;
+  if (when) return `Refreshed ${when}`;
+  if (who) return `Refreshed by ${who}`;
+  return null;
+}
+
+function fmtDuration(ms) {
+  const s = Math.ceil(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.ceil(s / 60)}m`;
+}
+
+// Live cooldown label: m:ss so it visibly ticks (e.g. "1:59", "0:07").
+function fmtCooldown(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function fmtCount(n) {
+  return Number.isFinite(n) ? formatNumber(n) : "—";
+}
+
+const REPORT_SPINNER_SVG = `<svg class="icon-spin" width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M15.312 4.688A6.5 6.5 0 003.79 9.124a.75.75 0 11-1.488-.198 8 8 0 0114.18-5.45V2.75a.75.75 0 011.5 0v3a.75.75 0 01-.75.75h-3a.75.75 0 010-1.5h.892a6.5 6.5 0 00-.812-.312zM3.96 13.5a6.5 6.5 0 0011.66-4.27.75.75 0 111.484.236A8 8 0 013.18 14.93v.82a.75.75 0 01-1.5 0v-3a.75.75 0 01.75-.75h3a.75.75 0 010 1.5H3.96z" clip-rule="evenodd"/></svg>`;
+
+function reportSpinnerNote(text) {
+  const d = document.createElement("div");
+  d.className = "flex items-center gap-2 text-sm text-ink-500 py-1";
+  d.innerHTML = `${REPORT_SPINNER_SVG}<span></span>`;
+  d.querySelector("span").textContent = text;
+  return d;
+}
+
+function reportTextNote(text, danger) {
+  const d = document.createElement("div");
+  d.className = `text-sm py-1 ${danger ? "text-urgent" : "text-ink-500"}`;
+  d.textContent = text;
+  return d;
+}
+
+function stopReportPolling(id) {
+  const h = reportPollers.get(id);
+  if (h) clearTimeout(h);
+  reportPollers.delete(id);
+}
+
+function startReportPolling(id) {
+  stopReportPolling(id);
+  let attempts = 0;
+  const tick = () => {
+    attempts++;
+    fetchPropertyReport(id).then((rec) => {
+      // Self-cancel if the user navigated away from this property (render()
+      // tears the card down on every setState, so we can't rely on cleanup
+      // to stop us — but the route is authoritative).
+      const st = getState();
+      if (st.route.name !== "detail" ||
+          String(st.route.params.propertyId) !== id) {
+        stopReportPolling(id);
+        return;
+      }
+      if (!reportPollers.has(id)) return; // cancelled meanwhile
+
+      const status = rec && rec.status;
+      if (status === "ready" || status === "error" || status === "auth_error") {
+        stopReportPolling(id);
+        setPropertyReport(id, { ...rec, polling: false });
+        return;
+      }
+      if (attempts >= REPORT_POLL_MAX) {
+        stopReportPolling(id);
+        setPropertyReport(id, { ...(rec || {}), polling: false, timedOut: true });
+        return;
+      }
+      // Still running — keep polling SILENTLY. Calling setPropertyReport here
+      // would setState → main.js render() rebuilds the whole tree → the page
+      // visibly flashes (fade-in replays) every poll. The card already shows
+      // the "Computing…" state from the click; the spinner animates via CSS
+      // (no re-render needed). We only setState on a terminal transition.
+      reportPollers.set(id, setTimeout(tick, REPORT_POLL_MS));
+    });
+  };
+  reportPollers.set(id, setTimeout(tick, REPORT_POLL_FIRST_MS));
+}
+
+// Lazy one-shot KV read on first open. Async-only (never setState during
+// render): the .then() fires after render() completes.
+function hydrateReport(id) {
+  if (reportHydrating.has(id)) return;
+  reportHydrating.add(id);
+  fetchPropertyReport(id).then((rec) => {
+    reportHydrating.delete(id);
+    setPropertyReport(id, rec || { status: "empty" });
+  });
+}
+
+async function onReportRefresh(id) {
+  setPropertyReport(id, { status: "running", polling: true, startedAt: Date.now() });
+  const rec = await triggerPropertyReportRefresh(id);
+  if (rec && rec.status === "running") {
+    setPropertyReport(id, { ...rec, polling: true });
+    startReportPolling(id);
+  } else {
+    // ready (cooldown'd shared data), error, or auth_error — terminal.
+    setPropertyReport(id, { ...(rec || { status: "error", error: "Refresh failed" }), polling: false });
+  }
+}
+
+function buildHubSpotReportSection(listing) {
+  const id = String(listing.propertyId || "");
+  const slice = getState().propertyReports[id];
+
+  if (!slice) hydrateReport(id);
+  // Another user's refresh may be in flight when we open the page — pick it
+  // up and poll to completion (guard against double-starting a poller).
+  if (slice && slice.status === "running" && !reportPollers.has(id)) {
+    startReportPolling(id);
+  }
+
+  const status = slice && slice.status;
+  const data = slice && slice.data;
+  const rows = [];
+  let note = null;
+  let footer = reportProvenance(slice);
+  let refreshDisabled = false;
+  let refreshLabel = "Refresh reports";
+  let refreshBusy = false;
+  let cooldownEndsAt = null;
+
+  if (!slice || status === "loading") {
+    note = reportSpinnerNote("Loading report…");
+    refreshDisabled = true;
+  } else if (status === "empty") {
+    note = reportTextNote("No report yet — generate the first report.");
+    refreshLabel = "Generate reports";
+  } else if (status === "running" || (slice && slice.polling)) {
+    refreshDisabled = true;
+    refreshBusy = true;
+    refreshLabel = "Refreshing…";
+    if (slice && slice.timedOut) {
+      note = reportTextNote("Still computing — check back shortly.");
+    } else {
+      const by = slice && slice.triggeredBy
+        ? ` by ${titleCaseFromEmail(slice.triggeredBy)}` : "";
+      const when = slice && Number.isFinite(slice.startedAt)
+        ? ` (started ${relativeFromNow(slice.startedAt)}${by})` : "";
+      note = reportSpinnerNote(`Computing…${when}`);
+    }
+  } else if (status === "ready" && data) {
+    const t = data.totals || {};
+    rows.push(["Contacts", fmtCount(t.contacts)]);
+    rows.push(["Deals", fmtCount(t.deals)]);
+    rows.push(["Open tasks", fmtCount(t.openTasks)]);
+
+    const byBucket = (data.leadStatus && data.leadStatus.byBucket) || {};
+    for (const [key, label] of Object.entries(HS_LEAD_STATUS_BUCKET_LABELS)) {
+      const n = byBucket[key];
+      // Surface unmapped only when non-zero; skip other empty buckets.
+      if (!Number.isFinite(n) || n === 0) continue;
+      rows.push([label, fmtCount(n)]);
+    }
+
+    for (const s of (data.dealsByStage || [])) {
+      rows.push([`Deal · ${s.label || s.stageId || "Stage"}`, fmtCount(s.count)]);
+    }
+
+    if (Number.isFinite(slice.cooldownRemainingMs) && slice.cooldownRemainingMs > 0) {
+      refreshDisabled = true;
+      cooldownEndsAt = Date.now() + slice.cooldownRemainingMs;
+      refreshLabel = `Refresh (in ${fmtCooldown(slice.cooldownRemainingMs)})`;
+    }
+  } else if (status === "error") {
+    note = reportTextNote(slice.error || "Couldn't load the report.", true);
+  } else if (status === "auth_error") {
+    note = reportTextNote("Sign in to view HubSpot reports.", true);
+  } else {
+    note = reportTextNote("No report yet — generate the first report.");
+    refreshLabel = "Generate reports";
+  }
+
+  const wrap = section("HubSpot reports", rows);
+
+  if (note) wrap.appendChild(note);
+
+  const foot = document.createElement("div");
+  foot.className = "mt-4 flex items-center justify-between gap-3 flex-wrap";
+
+  const stamp = document.createElement("span");
+  stamp.className = "text-xs text-ink-400";
+  stamp.textContent = footer || "";
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.disabled = refreshDisabled;
+  btn.className = "inline-flex items-center gap-2 rounded-lg bg-white hover:bg-ink-50 text-ink-800 ring-1 ring-ink-200 px-3 py-1.5 text-sm font-medium shadow-sm transition disabled:opacity-60 disabled:cursor-not-allowed";
+  btn.innerHTML = `<svg class="${refreshBusy ? "icon-spin" : ""}" width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M15.312 4.688A6.5 6.5 0 003.79 9.124a.75.75 0 11-1.488-.198 8 8 0 0114.18-5.45V2.75a.75.75 0 011.5 0v3a.75.75 0 01-.75.75h-3a.75.75 0 010-1.5h.892a6.5 6.5 0 00-.812-.312zM3.96 13.5a6.5 6.5 0 0011.66-4.27.75.75 0 111.484.236A8 8 0 013.18 14.93v.82a.75.75 0 01-1.5 0v-3a.75.75 0 01.75-.75h3a.75.75 0 010 1.5H3.96z" clip-rule="evenodd"/></svg><span></span>`;
+  btn.querySelector("span").textContent = refreshLabel;
+  btn.addEventListener("click", () => { if (!btn.disabled) onReportRefresh(id); });
+
+  // Live cooldown: drive the label off the shared 1 s ticker so it counts
+  // down (m:ss) and re-enables itself at zero — no reload needed. The ticker
+  // fires a synchronous first tick, so the initial label is exact too.
+  if (cooldownEndsAt) {
+    const lbl = btn.querySelector("span");
+    let unsub = subscribeCountdown((now) => {
+      const remaining = cooldownEndsAt - now;
+      if (remaining > 0) {
+        btn.disabled = true;
+        lbl.textContent = `Refresh (in ${fmtCooldown(remaining)})`;
+      } else {
+        btn.disabled = false;
+        lbl.textContent = "Refresh reports";
+        if (unsub) { unsub(); unsub = null; }
+      }
+    });
+    // teardown() walks descendants and calls each node's __cleanup; this
+    // section is a descendant of the detail root, so this runs on unmount
+    // (and on every re-render, matching the hero/timing countdown pattern).
+    wrap.__cleanup = () => { if (unsub) { unsub(); unsub = null; } };
+  }
+
+  foot.append(stamp, btn);
+  wrap.appendChild(foot);
+  return wrap;
 }
 
 function buildMapsUrl(listing) {

@@ -6,6 +6,7 @@ COMMENTS.md
 README.internal.md
 LEARNINGS.md
 BELMAZAD_API_INTEGRATION_REFERENCE_FINAL.md
+lead-status-segmentation
 .claude/
 
 # ── Worker source + deploy notes (the Worker runs on Cloudflare; this is

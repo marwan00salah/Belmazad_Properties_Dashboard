@@ -79,6 +79,49 @@ export async function initiateAuction({ property_id, auction_start_date }) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// WORKER-06: read the cached per-property HubSpot report from the Worker
+// (pure KV read — never triggers n8n). Fail-soft like fetchWhoAmI: returns
+// a status envelope, never throws, never hijacks the listings sign-in panel
+// (the report card renders its own inline auth message).
+export async function fetchPropertyReport(propertyId) {
+  let res;
+  try {
+    res = await fetch(
+      new URL(`hubspot/report?id=${encodeURIComponent(propertyId)}`, WORKER_URL).toString(),
+      { method: "GET", headers: { "Accept": "application/json" }, credentials: "include" },
+    );
+  } catch {
+    return { status: "auth_error" };
+  }
+  let data = null;
+  try { data = await res.json(); } catch {}
+  if (!res.ok) {
+    return { status: "error", error: data?.error || `Request failed (${res.status})` };
+  }
+  return data || { status: "empty" };
+}
+
+// WORKER-06: ask the Worker to (maybe) trigger an n8n recompute. The Worker
+// enforces the global per-property cooldown + in-progress de-dupe, so the
+// response may be "running", a cooldown'd "ready", or "error". Never throws.
+export async function triggerPropertyReportRefresh(propertyId) {
+  let res;
+  try {
+    res = await fetch(new URL("hubspot/refresh", WORKER_URL).toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ property_id: String(propertyId) }),
+    });
+  } catch {
+    return { status: "auth_error" };
+  }
+  let data = null;
+  try { data = await res.json(); } catch {}
+  if (data && typeof data === "object") return data;
+  return { status: "error", error: `Request failed (${res?.status ?? 0})` };
+}
+
 // Probe to see whether the API actually paginates. Called once at startup.
 // Returns true if page 2 returns a different first listing than page 1.
 export async function probePagination(firstListings) {
