@@ -1,3 +1,16 @@
+<!-- docs-sync
+purpose:     Public-facing readme + Updates/changelog for the GitHub Pages dashboard
+audience:    public
+sync-policy: structured
+owned-by:    -
+invariants:
+  - renders cleanly on GitHub; this spec block never visible
+  - references ONLY public artifacts (index.html, css/, js/, README.md, .gitignore)
+  - Updates section's top entry == latest shipped (committed) version
+sources:
+  - git:latest-version
+  - gitignore:README.md=no
+-->
 # Belmazad Properties Dashboard
 
 Internal operations dashboard for Belmazad personnel to monitor live property listings on [belmazad.com](https://belmazad.com).
@@ -18,6 +31,14 @@ Internal operations dashboard for Belmazad personnel to monitor live property li
 - **Cloudflare Access** — gates the Worker with an explicit email allow-list. The static site is harmless without API data, so it can live on a public Pages URL.
 
 ## Updates
+
+### v1.2.1 — Terms booklet download (2026-05-17)
+
+**Detail view**
+- New **Booklet** action in the hero buttons row — downloads the property's official auction terms booklet (PDF) in one click, with the original filename preserved. Shows as a disabled **N/A** tile (like VR tour / YouTube) for properties that don't have a booklet.
+
+**Backend (Cloudflare Worker)**
+- The booklet is retrieved and streamed through the Cloudflare Worker so it downloads directly from the dashboard.
 
 ### v1.2 — Per-property HubSpot reports (2026-05-16)
 
