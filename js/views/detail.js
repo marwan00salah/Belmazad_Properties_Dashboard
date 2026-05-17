@@ -4,7 +4,7 @@ import { decode, HS_LEAD_STATUS_BUCKET_LABELS } from "../lookups.js";
 import { statusBadge, listingStatusKinds } from "../components/statusBadge.js";
 import { subscribeCountdown } from "../countdown.js";
 import { getState, setPropertyReport } from "../state.js";
-import { initiateAuction, fetchPropertyReport, triggerPropertyReportRefresh } from "../api.js";
+import { initiateAuction, fetchPropertyReport, triggerPropertyReportRefresh, probeBooklet } from "../api.js";
 
 function section(title, rows) {
   const wrap = document.createElement("section");
@@ -1068,6 +1068,8 @@ const ACTION_ICONS = {
   yt:       `<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M19.6 6.2a2.5 2.5 0 00-1.7-1.8C16.3 4 10 4 10 4s-6.3 0-7.9.4A2.5 2.5 0 00.4 6.2C0 7.8 0 10 0 10s0 2.2.4 3.8a2.5 2.5 0 001.7 1.8c1.6.4 7.9.4 7.9.4s6.3 0 7.9-.4a2.5 2.5 0 001.7-1.8c.4-1.6.4-3.8.4-3.8s0-2.2-.4-3.8zM8 13V7l5 3-5 3z"/></svg>`,
   // WORKER-01: gallery zip download.
   download: `<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M10 3a1 1 0 011 1v7.586l2.293-2.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L9 11.586V4a1 1 0 011-1zm-6 13a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1z"/></svg>`,
+  // WORKER-07: terms-booklet PDF download.
+  pdf:      `<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4 2a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2V7.414A2 2 0 0017.414 6L14 2.586A2 2 0 0012.586 2H4zm8 1.5V6a1 1 0 001 1h2.5L12 3.5zM6 11a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clip-rule="evenodd"/></svg>`,
   copy:     `<svg width="11" height="11" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M7 3a2 2 0 00-2 2v1H4a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-1h1a2 2 0 002-2V5a2 2 0 00-2-2H7zm0 2h8v8h-1V8a2 2 0 00-2-2H7V5zM4 8h8v8H4V8z"/></svg>`,
 };
 
@@ -1114,11 +1116,58 @@ function actionButton({ label, url, palette, icon }) {
   return wrap;
 }
 
+// WORKER-07: probe results cached per propertyId for the module's lifetime.
+// `render()` rebuilds the whole tree on every setState, so without this we'd
+// re-probe the Worker on each rebuild. Value is `boolean` once resolved, or
+// the in-flight `Promise<boolean>` while the first probe is pending.
+const bookletProbeCache = new Map();
+
+// WORKER-07: always 5 tiles (Maps/VR/YouTube/Photos/Booklet). Booklet behaves
+// exactly like VR tour / YouTube — present but greyed "N/A" when unavailable.
+// 3-up at sm / 5-up at lg so the longest label never cramps at mid widths.
+const ACTIONS_GRID = "mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3";
+
+const bookletTile = (url) => actionButton({
+  label:   "Booklet",
+  url,                       // null ⇒ disabled "N/A" tile, same as VR/YouTube
+  palette: "bg-sky-700 hover:bg-sky-800",
+  icon:    ACTION_ICONS.pdf,
+});
+
+// The Booklet tile is always rendered. Whether the property actually has a
+// booklet isn't in the listing data, so a scrape-only probe decides enabled
+// vs. the disabled N/A state. We render N/A first and upgrade to the live
+// link when the probe confirms — never the reverse, so a click during the
+// probe window can't hit a property that turns out to have no booklet.
+function buildBookletTile(listing, bookletUrl) {
+  const id = listing.propertyId;
+  if (!id || !bookletUrl) return bookletTile(null);
+
+  const cached = bookletProbeCache.get(id);
+  if (cached === true) return bookletTile(bookletUrl);
+  if (cached === false) return bookletTile(null);
+
+  const holder = bookletTile(null);
+  let p = cached instanceof Promise ? cached : null;
+  if (!p) {
+    p = probeBooklet(id).then((ok) => { bookletProbeCache.set(id, ok); return ok; });
+    bookletProbeCache.set(id, p);
+  }
+  p.then((ok) => {
+    if (!ok || !holder.isConnected) return;     // absent, or row replaced
+    holder.replaceWith(bookletTile(bookletUrl)); // swap N/A → live link
+  });
+  return holder;
+}
+
 function buildActionsRow(listing) {
   const row = document.createElement("div");
-  row.className = "mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3";
+  row.className = ACTIONS_GRID;
   const galleryZipUrl = listing.propertyId
     ? `${WORKER_URL}gallery.zip?id=${encodeURIComponent(listing.propertyId)}`
+    : null;
+  const bookletUrl = listing.propertyId
+    ? `${WORKER_URL}booklet?id=${encodeURIComponent(listing.propertyId)}`
     : null;
   row.append(
     actionButton({
@@ -1147,6 +1196,8 @@ function buildActionsRow(listing) {
       palette: "bg-ink-700 hover:bg-ink-800",
       icon:    ACTION_ICONS.download,
     }),
+    // WORKER-07: always present; N/A until the probe confirms a booklet.
+    buildBookletTile(listing, bookletUrl),
   );
   return row;
 }

@@ -79,6 +79,24 @@ export async function initiateAuction({ property_id, auction_start_date }) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// WORKER-07: existence probe for the terms-booklet PDF. The Worker side is
+// scrape-only (no belmazad.com login). Fail-soft + fail-closed: any error →
+// not available, so the Booklet tile is simply not rendered (matches the
+// "hide when absent" UX). Never throws.
+export async function probeBooklet(propertyId) {
+  try {
+    const res = await fetch(
+      new URL(`booklet?id=${encodeURIComponent(propertyId)}&probe=1`, WORKER_URL).toString(),
+      { method: "GET", headers: { "Accept": "application/json" }, credentials: "include" },
+    );
+    if (!res.ok) return false;
+    const json = await res.json();
+    return !!json.available;
+  } catch {
+    return false;
+  }
+}
+
 // WORKER-06: read the cached per-property HubSpot report from the Worker
 // (pure KV read — never triggers n8n). Fail-soft like fetchWhoAmI: returns
 // a status envelope, never throws, never hijacks the listings sign-in panel
