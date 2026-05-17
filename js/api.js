@@ -140,6 +140,29 @@ export async function triggerPropertyReportRefresh(propertyId) {
   return { status: "error", error: `Request failed (${res?.status ?? 0})` };
 }
 
+// WORKER-08: read the per-property offers list from the Worker. The Worker
+// side is a READ-ONLY admin scrape — it never mutates anything upstream.
+// Fail-soft like fetchPropertyReport: returns a status envelope, never throws,
+// and renders its own inline auth/error message instead of hijacking the
+// listings sign-in panel.
+export async function fetchPropertyOffers(propertyId) {
+  let res;
+  try {
+    res = await fetch(
+      new URL(`offers?id=${encodeURIComponent(propertyId)}`, WORKER_URL).toString(),
+      { method: "GET", headers: { "Accept": "application/json" }, credentials: "include" },
+    );
+  } catch {
+    return { status: "auth_error" };
+  }
+  let data = null;
+  try { data = await res.json(); } catch {}
+  if (!res.ok) {
+    return { status: "error", error: data?.error || `Request failed (${res.status})` };
+  }
+  return data || { status: "empty" };
+}
+
 // Probe to see whether the API actually paginates. Called once at startup.
 // Returns true if page 2 returns a different first listing than page 1.
 export async function probePagination(firstListings) {

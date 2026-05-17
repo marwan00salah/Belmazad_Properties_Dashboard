@@ -21,6 +21,10 @@ const initial = {
   // propertyId → { status, data?, computedAt?, startedAt?, triggeredBy?,
   // cooldownRemainingMs?, polling? }. Hydrated lazily from KV on detail open.
   propertyReports: {},
+  // WORKER-08: per-property offers cache, keyed by propertyId →
+  // { status, offers?, count?, error? }. Hydrated lazily (one-shot, no
+  // polling) from the Worker's READ-ONLY admin scrape on detail open.
+  propertyOffers: {},
 };
 
 let state = initial;
@@ -46,6 +50,15 @@ export function setPropertyReport(propertyId, patch) {
   const prev = state.propertyReports[id] || {};
   setState({
     propertyReports: { ...state.propertyReports, [id]: { ...prev, ...patch } },
+  });
+}
+
+// WORKER-08: replace one property's offers slice and notify subscribers
+// (drives the offers-card re-render via subscribe(render)).
+export function setPropertyOffers(propertyId, slice) {
+  const id = String(propertyId);
+  setState({
+    propertyOffers: { ...state.propertyOffers, [id]: slice },
   });
 }
 

@@ -32,6 +32,14 @@ Internal operations dashboard for Belmazad personnel to monitor live property li
 
 ## Updates
 
+### v1.2.2 — Offers history (2026-05-17)
+
+**Detail view**
+- New **Offers History** card on each property page — every offer made on the property, with the offerer's name, amount, date, and review status. The highest offer is highlighted, and amounts display in their original currency (e.g. USD or EGP).
+
+**Backend (Cloudflare Worker)**
+- Offers are retrieved through the Cloudflare Worker and briefly cached, so repeat opens of the same property load instantly.
+
 ### v1.2.1 — Terms booklet download (2026-05-17)
 
 **Detail view**

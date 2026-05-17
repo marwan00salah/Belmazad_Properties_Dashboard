@@ -3,8 +3,8 @@ import { money, formatNumber, formatDate, formatDateTime, timeUntil, daysSince, 
 import { decode, HS_LEAD_STATUS_BUCKET_LABELS } from "../lookups.js";
 import { statusBadge, listingStatusKinds } from "../components/statusBadge.js";
 import { subscribeCountdown } from "../countdown.js";
-import { getState, setPropertyReport } from "../state.js";
-import { initiateAuction, fetchPropertyReport, triggerPropertyReportRefresh, probeBooklet } from "../api.js";
+import { getState, setPropertyReport, setPropertyOffers } from "../state.js";
+import { initiateAuction, fetchPropertyReport, triggerPropertyReportRefresh, probeBooklet, fetchPropertyOffers } from "../api.js";
 
 function section(title, rows) {
   const wrap = document.createElement("section");
@@ -285,6 +285,11 @@ export function renderDetail(propertyId) {
 
   // DETAIL-22: per-property HubSpot reports card (n8n-backed; see WORKER-06).
   center.appendChild(buildHubSpotReportSection(listing));
+
+  // WORKER-08: per-property offers card (READ-ONLY admin scrape via the
+  // Worker). Lazy-hydrated on open like the HubSpot card; any signed-in
+  // CF Access user can see it (no operator gate).
+  center.appendChild(buildOffersSection(listing));
 
   // DETAIL-09: live "Starts in / Ends in" tile at the top of the Timing
   // section, styled with a negative (inverted) palette — dark background,
@@ -1047,6 +1052,163 @@ function buildHubSpotReportSection(listing) {
 
   foot.append(stamp, btn);
   wrap.appendChild(foot);
+  return wrap;
+}
+
+// ── WORKER-08: per-property offers card ──────────────────────────────────
+// Read-only. The Worker scrapes the admin offers list with a cached admin
+// session and returns parsed JSON; this card just renders it. One-shot lazy
+// hydrate on open (no polling, no refresh — offers change slowly and a page
+// reload re-fetches). State lives in state.propertyOffers[id].
+
+const offersHydrating = new Set(); // propertyId → lazy read in flight
+
+function hydrateOffers(id) {
+  if (offersHydrating.has(id)) return;
+  offersHydrating.add(id);
+  fetchPropertyOffers(id).then((rec) => {
+    offersHydrating.delete(id);
+    setPropertyOffers(id, rec || { status: "empty" });
+  });
+}
+
+function offerStatusPill(text) {
+  const t = String(text || "").trim();
+  const s = document.createElement("span");
+  let cls = "bg-ink-100 text-ink-600";
+  if (/approv|accept|confirm|done|complete|success/i.test(t)) cls = "bg-emerald-100 text-emerald-700";
+  else if (/reject|declin|cancel|fail/i.test(t)) cls = "bg-urgent/10 text-urgent";
+  s.className = `inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${cls}`;
+  s.textContent = t || "—";
+  return s;
+}
+
+function offerNumericValue(o) {
+  if (Number.isFinite(o.priceValue)) return o.priceValue;
+  const n = Number(String(o.price || "").replace(/[^\d.]/g, ""));
+  return Number.isFinite(n) ? n : -Infinity;
+}
+
+// Price label with the offer's own currency ($, £, …) — never assume EGP;
+// Make-An-Offer listings are frequently USD. Falls back to the bare amount
+// if no symbol was parsed, and to "—" when there's no price at all.
+function offerPriceLabel(o) {
+  if (!o.price) return "—";
+  return o.currency ? `${o.currency} ${o.price}` : o.price;
+}
+
+function buildOffersSection(listing) {
+  const id = String(listing.propertyId || "");
+  const slice = getState().propertyOffers[id];
+  if (!slice) hydrateOffers(id);
+
+  const wrap = document.createElement("section");
+  wrap.className = "rounded-xl bg-white shadow-sm ring-1 ring-ink-100 p-5 md:p-6";
+  const h = document.createElement("h2");
+  h.className = "text-sm font-semibold text-ink-500 uppercase tracking-wider mb-4";
+  h.textContent = "Offers History";
+  wrap.appendChild(h);
+
+  const status = slice && slice.status;
+
+  if (!slice || status === "loading") {
+    wrap.appendChild(reportSpinnerNote("Loading offers…"));
+    return wrap;
+  }
+  if (status === "auth_error") {
+    wrap.appendChild(reportTextNote("Sign in to view offers.", true));
+    return wrap;
+  }
+  if (status === "error") {
+    wrap.appendChild(reportTextNote(slice.error || "Couldn't load offers.", true));
+    return wrap;
+  }
+
+  const offers = Array.isArray(slice.offers) ? slice.offers : [];
+  if (!offers.length) {
+    wrap.appendChild(reportTextNote("No offers on this property yet."));
+    return wrap;
+  }
+
+  // Highest by numeric value (ties → first seen wins).
+  let highestId = null;
+  let highestVal = -Infinity;
+  for (const o of offers) {
+    const v = offerNumericValue(o);
+    if (v > highestVal) { highestVal = v; highestId = o.offerId; }
+  }
+
+  const list = document.createElement("div");
+  list.className = "flex flex-col gap-3";
+  for (const o of offers) {
+    const isTop = o.offerId === highestId;
+    const card = document.createElement("div");
+    card.className = isTop
+      ? "rounded-lg ring-1 ring-emerald-300 bg-emerald-50/60 p-3"
+      : "rounded-lg ring-1 ring-ink-100 bg-ink-50/40 p-3";
+
+    const top = document.createElement("div");
+    top.className = "flex items-start justify-between gap-3 flex-wrap";
+
+    const who = document.createElement("div");
+    who.className = "min-w-0";
+    const name = document.createElement("div");
+    name.className = "text-sm font-semibold text-ink-900 truncate";
+    name.textContent = o.userName || "—";
+    const when = document.createElement("div");
+    when.className = "text-xs text-ink-400 mt-0.5";
+    when.textContent = o.date || "";
+    who.append(name, when);
+
+    const priceWrap = document.createElement("div");
+    priceWrap.className = "text-right shrink-0";
+    const price = document.createElement("div");
+    price.className = "text-sm font-semibold tabular-nums " + (isTop ? "text-emerald-700" : "text-ink-900");
+    price.textContent = offerPriceLabel(o);
+    priceWrap.appendChild(price);
+    if (isTop) {
+      const tag = document.createElement("span");
+      tag.className = "inline-block mt-0.5 rounded bg-emerald-600 text-white px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide";
+      tag.textContent = "Highest";
+      priceWrap.appendChild(tag);
+    }
+    top.append(who, priceWrap);
+    card.appendChild(top);
+
+    const statuses = document.createElement("div");
+    statuses.className = "mt-2 flex items-center gap-2 flex-wrap";
+    const mk = (label, value) => {
+      const g = document.createElement("span");
+      g.className = "inline-flex items-center gap-1 text-[10px] text-ink-400";
+      const l = document.createElement("span");
+      l.textContent = `${label}:`;
+      g.append(l, offerStatusPill(value));
+      return g;
+    };
+    statuses.append(
+      mk("Maker", o.makerStatus),
+      mk("Checker", o.checkerStatus),
+      mk("Belmazad", o.belmazadStatus),
+    );
+    card.appendChild(statuses);
+
+    if (o.notes) {
+      const n = document.createElement("p");
+      n.className = "mt-2 text-xs text-ink-600 whitespace-pre-line break-words";
+      n.textContent = o.notes;
+      card.appendChild(n);
+    }
+    list.appendChild(card);
+  }
+  wrap.appendChild(list);
+
+  const foot = document.createElement("div");
+  foot.className = "mt-4 text-xs text-ink-400";
+  const topOffer = offers.find(o => o.offerId === highestId);
+  foot.textContent = `${offers.length} offer${offers.length === 1 ? "" : "s"}`
+    + (topOffer && topOffer.price ? ` · highest ${offerPriceLabel(topOffer)} by ${topOffer.userName || "—"}` : "");
+  wrap.appendChild(foot);
+
   return wrap;
 }
 
