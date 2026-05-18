@@ -25,6 +25,19 @@ const initial = {
   // { status, offers?, count?, error? }. Hydrated lazily (one-shot, no
   // polling) from the Worker's READ-ONLY admin scrape on detail open.
   propertyOffers: {},
+  // WORKER-10/DETAIL-23: per-property listing entities (real Seller=Checker
+  // / Broker=Maker + contact, live Active/InActive, approvals), keyed by
+  // propertyId → { status, maker?, checker?, liveStatus?, approvals?, error? }.
+  // Lazily hydrated (one-shot) from the Worker's READ-ONLY admin scrape.
+  propertyEntities: {},
+  // WORKER-11/DETAIL-24: per-property auction registrations ("Bidders List"),
+  // keyed by propertyId → { status, bidders?, count?, error? }. Lazily
+  // hydrated (one-shot) for Online-Auction properties only.
+  propertyBidders: {},
+  // DATA-04: buyer/fuser id → { status, name?, email?, phone?, city?, error? }
+  // resolve cache (keyed by BUYER id, not propertyId — a buyer recurs across
+  // properties). Lazily hydrated to name the highest bidder/offerer.
+  buyers: {},
 };
 
 let state = initial;
@@ -59,6 +72,30 @@ export function setPropertyOffers(propertyId, slice) {
   const id = String(propertyId);
   setState({
     propertyOffers: { ...state.propertyOffers, [id]: slice },
+  });
+}
+
+// WORKER-10/DETAIL-23: replace one property's entities slice and notify.
+export function setPropertyEntities(propertyId, slice) {
+  const id = String(propertyId);
+  setState({
+    propertyEntities: { ...state.propertyEntities, [id]: slice },
+  });
+}
+
+// WORKER-11/DETAIL-24: replace one property's bidders slice and notify.
+export function setPropertyBidders(propertyId, slice) {
+  const id = String(propertyId);
+  setState({
+    propertyBidders: { ...state.propertyBidders, [id]: slice },
+  });
+}
+
+// DATA-04: cache one buyer/fuser resolve (keyed by buyer id) and notify.
+export function setBuyer(buyerId, slice) {
+  const id = String(buyerId);
+  setState({
+    buyers: { ...state.buyers, [id]: slice },
   });
 }
 

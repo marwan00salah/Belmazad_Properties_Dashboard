@@ -32,6 +32,17 @@ Internal operations dashboard for Belmazad personnel to monitor live property li
 
 ## Updates
 
+### v1.2.2.2 — Real seller/broker, auction registrations & named bidders (2026-05-18)
+
+**Detail view**
+- The **Seller / Agent** panel now shows the *real* seller (the assigned Checker) and the listing **Broker** (Maker) as two clearly labelled groups with full contact details — previously every property showed the same generic listing account. A live **Active / Inactive** badge indicates whether the property is currently published.
+- New **Auction Registrations** card on bidding-auction properties — everyone registered to bid, with contact, registration date, payment/approval status, and proof-of-funds / terms-booklet links. It's the auction-side counterpart to the Offers History card (which continues to show on make-an-offer properties).
+- The **highest bidder / offerer** now displays the person's **name** instead of a bare numeric ID.
+- Status pills now colour correctly across the Offers and Registrations cards: approved → green, unapproved/unpaid/rejected → red, pending → amber.
+
+**Backend (Cloudflare Worker)**
+- New read-only, briefly-cached Worker lookups resolve the seller/broker, auction registrations, and bidder/offerer names, so repeat opens stay fast.
+
 ### v1.2.2 — Offers history (2026-05-17)
 
 **Detail view**

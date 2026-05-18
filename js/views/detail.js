@@ -3,8 +3,8 @@ import { money, formatNumber, formatDate, formatDateTime, timeUntil, daysSince, 
 import { decode, HS_LEAD_STATUS_BUCKET_LABELS } from "../lookups.js";
 import { statusBadge, listingStatusKinds } from "../components/statusBadge.js";
 import { subscribeCountdown } from "../countdown.js";
-import { getState, setPropertyReport, setPropertyOffers } from "../state.js";
-import { initiateAuction, fetchPropertyReport, triggerPropertyReportRefresh, probeBooklet, fetchPropertyOffers } from "../api.js";
+import { getState, setPropertyReport, setPropertyOffers, setPropertyEntities, setPropertyBidders, setBuyer } from "../state.js";
+import { initiateAuction, fetchPropertyReport, triggerPropertyReportRefresh, probeBooklet, fetchPropertyOffers, fetchPropertyEntities, fetchPropertyBidders, fetchBuyer } from "../api.js";
 
 function section(title, rows) {
   const wrap = document.createElement("section");
@@ -180,6 +180,20 @@ export function renderDetail(propertyId) {
   // (now-removed) Commercial terms section.
   const priceMod = decode("priceModifier", listing.priceModifier);
 
+  // DATA-04: searchProperty.highestBidder is a buyer/fuser id (highest
+  // bidder for Online-Auction, highest offerer for Make-An-Offer). Resolve
+  // it to a name via /buyer (lazy; render() re-runs on the setBuyer hydrate).
+  // Until resolved (or on failure) show the bare #id so the row never blanks.
+  const hbId = listing.highestBidder != null ? String(listing.highestBidder).trim() : "";
+  let highestPersonLabel = null;
+  if (hbId && hbId !== "0") {
+    const bslice = getState().buyers[hbId];
+    if (!bslice) hydrateBuyer(hbId);
+    highestPersonLabel = (bslice && bslice.status === "ok")
+      ? (personDisplayName(bslice) || `#${hbId}`)
+      : `#${hbId}`;
+  }
+
   const offersSection = section(sectionTitle, [
     [isOffer ? "Starting offer"      : "Start bid",         money(listing.start_bid, listing.CURRENCY_SYMBOL || listing.CURRENCY_CODE)],
     [isOffer ? "Highest offer"       : "Current bid",       money(listing.current_bid, listing.CURRENCY_SYMBOL || listing.CURRENCY_CODE)],
@@ -188,7 +202,7 @@ export function renderDetail(propertyId) {
     ["Market value",                                        listing.current_market_value ? money(listing.current_market_value, listing.CURRENCY_SYMBOL || listing.CURRENCY_CODE) : null],
     ["Guide price",                                         listing.auction_guide_price ? money(listing.auction_guide_price, listing.CURRENCY_SYMBOL || listing.CURRENCY_CODE) : null],
     [isOffer ? "Total offers"        : "Total bids",        formatNumber(listing.no_of_bids)],
-    [isOffer ? "Highest offerer ID"  : "Highest bidder ID", listing.highestBidder ? `#${listing.highestBidder}` : null],
+    [isOffer ? "Highest offerer"     : "Highest bidder",    highestPersonLabel],
     ["Sold amount",                                         isTrue(listing.propertySold) ? money(listing.soldAmount, listing.CURRENCY_SYMBOL || listing.CURRENCY_CODE) : null],
     ["Payment terms",                                       decode("purchaseStatus", listing.purchaseStatus)],
     ["Price modifier",                                      priceMod && priceMod !== "None" ? priceMod : null],
@@ -231,15 +245,11 @@ export function renderDetail(propertyId) {
   // collapsible disclosure inside the hero card (see buildDescriptionDisclosure
   // below). The old standalone section block has been removed.
 
-  const sellerName = [listing.firstName, listing.middleName, listing.lastName].filter(Boolean).join(" ").trim();
-  const sellerSection = section("Seller / Agent", [
-    ["Name",          sellerName],
-    ["Seller type",   decode("sellerType", listing.sellerType)],
-    ["Email",         listing.email && listing.email !== "super admin" ? listing.email : null],
-    ["Office phone",  listing.officeNumber],
-  ]);
-  // Left rail width → stack vertically (DETAIL-10).
-  sellerSection.querySelector("dl")?.classList.remove("sm:grid-cols-2");
+  // DETAIL-23: searchProperty only ever returns the *Maker* (Broker) identity
+  // in firstName/lastName/officeNumber — never the real seller. buildSellerSection
+  // lazy-resolves the real Seller (Checker) + Broker (Maker) via WORKER-10 and
+  // fails soft to today's single block (no regression) until it arrives.
+  const sellerSection = buildSellerSection(listing);
 
   let lawyersSection = null;
   if (listing.lawyersCompanyName || listing.lawyersName || listing.lawyersEmail) {
@@ -286,10 +296,12 @@ export function renderDetail(propertyId) {
   // DETAIL-22: per-property HubSpot reports card (n8n-backed; see WORKER-06).
   center.appendChild(buildHubSpotReportSection(listing));
 
-  // WORKER-08: per-property offers card (READ-ONLY admin scrape via the
-  // Worker). Lazy-hydrated on open like the HubSpot card; any signed-in
-  // CF Access user can see it (no operator gate).
-  center.appendChild(buildOffersSection(listing));
+  // WORKER-08 / DETAIL-24: per-property demand card (READ-ONLY admin scrape
+  // via the Worker), lazy-hydrated like the HubSpot card. Mutually exclusive
+  // by auctionType: Make-An-Offer → Offers History; Online-Auction → Auction
+  // Registrations ("Bidders List"). A property is one or the other.
+  const isMakeOffer = listing.auctionType === "Make An Offer";
+  center.appendChild(isMakeOffer ? buildOffersSection(listing) : buildBiddersSection(listing));
 
   // DETAIL-09: live "Starts in / Ends in" tile at the top of the Timing
   // section, styled with a negative (inverted) palette — dark background,
@@ -1132,12 +1144,24 @@ function hydrateOffers(id) {
   });
 }
 
+// STYLE-05: status pill colouring. Shared by the Offers History card
+// (Maker/Checker/Belmazad) and the Auction Registrations card
+// (Payment/Status). NEGATIVE is tested FIRST so "Unapproved" / "Unpaid"
+// don't fall into the positive "approv"/"paid" match (the original bug:
+// "Unapproved" contains "approv" → wrongly green). Pending → amber.
 function offerStatusPill(text) {
   const t = String(text || "").trim();
   const s = document.createElement("span");
-  let cls = "bg-ink-100 text-ink-600";
-  if (/approv|accept|confirm|done|complete|success/i.test(t)) cls = "bg-emerald-100 text-emerald-700";
-  else if (/reject|declin|cancel|fail/i.test(t)) cls = "bg-urgent/10 text-urgent";
+  let cls = "bg-ink-100 text-ink-600"; // neutral / unknown
+  // Substring stems (NOT \b-anchored: statuses are inflected — "Unapproved",
+  // "Approved"). Negative first so "un-approv"/"unpaid" never reach green.
+  if (/un-?approv|not\s*approv|unpaid|not\s*paid|reject|declin|cancel|fail|inactive|void|^no$/i.test(t)) {
+    cls = "bg-urgent/10 text-urgent";                 // red — negative
+  } else if (/pending|await|in\s*review|processing|on\s*hold/i.test(t)) {
+    cls = "bg-amber-100 text-amber-700";              // amber — in progress
+  } else if (/approv|accept|confirm|complete|success|paid|active|verified|done|^yes$/i.test(t)) {
+    cls = "bg-emerald-100 text-emerald-700";          // green — positive
+  }
   s.className = `inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${cls}`;
   s.textContent = t || "—";
   return s;
@@ -1269,6 +1293,275 @@ function buildOffersSection(listing) {
     + (topOffer && topOffer.price ? ` · highest ${offerPriceLabel(topOffer)} by ${topOffer.userName || "—"}` : "");
   wrap.appendChild(foot);
 
+  return wrap;
+}
+
+// ── DETAIL-23: real Seller (Checker) + Broker (Maker) ────────────────────
+// searchProperty bakes in only the Maker identity. WORKER-10 resolves both
+// from the admin index + per-id agent edit pages. One-shot lazy hydrate;
+// fail-soft to today's single block (no regression) on loading/error.
+
+const entitiesHydrating = new Set();
+
+function hydrateEntities(id) {
+  if (entitiesHydrating.has(id)) return;
+  entitiesHydrating.add(id);
+  fetchPropertyEntities(id).then((rec) => {
+    entitiesHydrating.delete(id);
+    setPropertyEntities(id, rec || { status: "empty" });
+  });
+}
+
+// DATA-04: one-shot lazy resolve of a buyer/fuser id → name (+ contact).
+const buyerHydrating = new Set();
+
+function hydrateBuyer(id) {
+  if (buyerHydrating.has(id)) return;
+  buyerHydrating.add(id);
+  fetchBuyer(id).then((rec) => {
+    buyerHydrating.delete(id);
+    setBuyer(id, rec || { status: "empty" });
+  });
+}
+
+function personDisplayName(p, fallbackName) {
+  if (!p) return fallbackName || "";
+  const composed = [p.firstName, p.lastName].filter(Boolean).join(" ").trim();
+  return (p.businessName && p.businessName.trim())
+    || composed
+    || (p.name && p.name.trim())
+    || fallbackName || "";
+}
+
+function entityRows(p) {
+  return [
+    ["Name",  personDisplayName(p)],
+    ["Email", p && p.email && p.email !== "super admin" ? p.email : null],
+    ["Phone", p && p.phone ? p.phone : null],
+    ["City",  p && p.city ? p.city : null],
+  ];
+}
+
+// Single-column label/value list (left-rail width); mirrors section()'s <dl>.
+function sellerDl(rows) {
+  const dl = document.createElement("dl");
+  dl.className = "grid grid-cols-1 gap-x-6 gap-y-3";
+  for (const [label, value] of rows) {
+    if (value == null || value === "") continue;
+    const row = document.createElement("div");
+    row.className = "flex flex-col gap-0.5";
+    const dt = document.createElement("dt");
+    dt.className = "text-xs text-ink-500 font-medium uppercase tracking-wider";
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.className = "text-sm text-ink-900";
+    dd.textContent = value;
+    row.append(dt, dd);
+    dl.appendChild(row);
+  }
+  return dl;
+}
+
+function sellerSubLabel(text) {
+  const d = document.createElement("div");
+  d.className = "text-xs font-semibold text-ink-600 uppercase tracking-wider mt-4 mb-2 first:mt-0";
+  d.textContent = text;
+  return d;
+}
+
+function buildSellerSection(listing) {
+  const id = String(listing.propertyId || "");
+  const slice = getState().propertyEntities[id];
+  if (!slice) hydrateEntities(id);
+
+  const wrap = document.createElement("section");
+  wrap.className = "rounded-xl bg-white shadow-sm ring-1 ring-ink-100 p-5 md:p-6";
+  const h = document.createElement("h2");
+  h.className = "text-sm font-semibold text-ink-500 uppercase tracking-wider mb-4";
+  h.textContent = "Seller / Agent";
+  wrap.appendChild(h);
+
+  // searchProperty exposes only the Maker identity — the fail-soft fallback.
+  const legacyName = [listing.firstName, listing.middleName, listing.lastName].filter(Boolean).join(" ").trim();
+  const legacyRows = [
+    ["Name",         legacyName],
+    ["Seller type",  decode("sellerType", listing.sellerType)],
+    ["Email",        listing.email && listing.email !== "super admin" ? listing.email : null],
+    ["Office phone", listing.officeNumber],
+  ];
+
+  const status = slice && slice.status;
+
+  if (status === "ok") {
+    if (slice.liveStatus) {
+      const b = document.createElement("span");
+      const live = /^active$/i.test(slice.liveStatus);
+      b.className = "inline-block mb-3 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide "
+        + (live ? "bg-emerald-100 text-emerald-700" : "bg-ink-200 text-ink-600");
+      b.textContent = slice.liveStatus;
+      wrap.appendChild(b);
+    }
+
+    // Seller = the real seller (Checker). "NA" upstream → not assigned.
+    wrap.appendChild(sellerSubLabel("Seller"));
+    if (slice.checker) {
+      wrap.appendChild(sellerDl([
+        ...entityRows(slice.checker),
+        ["Seller type", decode("sellerType", listing.sellerType)],
+      ]));
+    } else {
+      const na = document.createElement("p");
+      na.className = "text-sm text-ink-500";
+      na.textContent = "Not assigned";
+      wrap.appendChild(na);
+    }
+
+    // Broker = the listing entity that created it (Maker). Falls back to the
+    // searchProperty maker fields if the agent edit page didn't resolve.
+    wrap.appendChild(sellerSubLabel("Broker"));
+    const brokerRows = slice.maker
+      ? entityRows(slice.maker)
+      : [
+          ["Name",  legacyName],
+          ["Email", listing.email && listing.email !== "super admin" ? listing.email : null],
+          ["Phone", listing.officeNumber],
+        ];
+    wrap.appendChild(sellerDl(brokerRows));
+    return wrap;
+  }
+
+  // Fallback: today's exact block (no slice / loading / error / auth / not_found).
+  wrap.appendChild(sellerDl(legacyRows));
+  if (!slice || status === "loading") {
+    const note = document.createElement("p");
+    note.className = "mt-3 text-[11px] text-ink-400";
+    note.textContent = "Resolving real seller…";
+    wrap.appendChild(note);
+  }
+  return wrap;
+}
+
+// ── DETAIL-24: auction registrations card (Online-Auction only) ──────────
+// The auction-side mirror of the Offers History card. READ-ONLY admin scrape
+// of the "Bidders List" via WORKER-11; one-shot lazy hydrate.
+
+const biddersHydrating = new Set();
+
+function hydrateBidders(id) {
+  if (biddersHydrating.has(id)) return;
+  biddersHydrating.add(id);
+  fetchPropertyBidders(id).then((rec) => {
+    biddersHydrating.delete(id);
+    setPropertyBidders(id, rec || { status: "empty" });
+  });
+}
+
+function buildBiddersSection(listing) {
+  const id = String(listing.propertyId || "");
+  const slice = getState().propertyBidders[id];
+  if (!slice) hydrateBidders(id);
+
+  const wrap = document.createElement("section");
+  wrap.className = "rounded-xl bg-white shadow-sm ring-1 ring-ink-100 p-5 md:p-6";
+  const h = document.createElement("h2");
+  h.className = "text-sm font-semibold text-ink-500 uppercase tracking-wider mb-4";
+  h.textContent = "Auction Registrations";
+  wrap.appendChild(h);
+
+  const status = slice && slice.status;
+  if (!slice || status === "loading") {
+    wrap.appendChild(reportSpinnerNote("Loading registrations…"));
+    return wrap;
+  }
+  if (status === "auth_error") {
+    wrap.appendChild(reportTextNote("Sign in to view registrations.", true));
+    return wrap;
+  }
+  if (status === "error") {
+    wrap.appendChild(reportTextNote(slice.error || "Couldn't load registrations.", true));
+    return wrap;
+  }
+
+  const bidders = Array.isArray(slice.bidders) ? slice.bidders : [];
+  if (!bidders.length) {
+    wrap.appendChild(reportTextNote("No registrations on this auction yet."));
+    return wrap;
+  }
+
+  const list = document.createElement("div");
+  list.className = "flex flex-col gap-3";
+  for (const b of bidders) {
+    const card = document.createElement("div");
+    card.className = "rounded-lg ring-1 ring-ink-100 bg-ink-50/40 p-3";
+
+    const top = document.createElement("div");
+    top.className = "flex items-start justify-between gap-3 flex-wrap";
+    const who = document.createElement("div");
+    who.className = "min-w-0";
+    const name = document.createElement("div");
+    name.className = "text-sm font-semibold text-ink-900 truncate";
+    name.textContent = b.name || "—";
+    const contact = document.createElement("div");
+    contact.className = "text-xs text-ink-400 mt-0.5 truncate";
+    contact.textContent = [b.email, b.phone].filter(Boolean).join(" · ");
+    who.append(name, contact);
+
+    const when = document.createElement("div");
+    when.className = "text-right shrink-0";
+    const reg = document.createElement("div");
+    reg.className = "text-xs text-ink-500";
+    reg.textContent = b.registeredOn || "";
+    when.appendChild(reg);
+    top.append(who, when);
+    card.appendChild(top);
+
+    const statuses = document.createElement("div");
+    statuses.className = "mt-2 flex items-center gap-2 flex-wrap";
+    const mk = (label, value) => {
+      const g = document.createElement("span");
+      g.className = "inline-flex items-center gap-1 text-[10px] text-ink-400";
+      const l = document.createElement("span");
+      l.textContent = `${label}:`;
+      g.append(l, offerStatusPill(value));
+      return g;
+    };
+    if (b.paymentStatus) statuses.appendChild(mk("Payment", b.paymentStatus));
+    if (b.status) statuses.appendChild(mk("Status", b.status));
+    if (statuses.childNodes.length) card.appendChild(statuses);
+
+    const meta = [];
+    if (b.state) meta.push(b.state);
+    if (b.address) meta.push(b.address);
+    if (meta.length) {
+      const m = document.createElement("p");
+      m.className = "mt-2 text-xs text-ink-600 break-words";
+      m.textContent = meta.join(" — ");
+      card.appendChild(m);
+    }
+
+    const docs = document.createElement("div");
+    docs.className = "mt-2 flex items-center gap-3 flex-wrap";
+    const docLink = (label, href) => {
+      const a = document.createElement("a");
+      a.href = href;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.className = "text-[11px] font-medium text-sky-700 hover:underline";
+      a.textContent = label;
+      return a;
+    };
+    if (b.pofDocUrl) docs.appendChild(docLink("Proof of funds", b.pofDocUrl));
+    if (b.bookletDocUrl) docs.appendChild(docLink("Terms booklet", b.bookletDocUrl));
+    if (docs.childNodes.length) card.appendChild(docs);
+
+    list.appendChild(card);
+  }
+  wrap.appendChild(list);
+
+  const foot = document.createElement("div");
+  foot.className = "mt-4 text-xs text-ink-400";
+  foot.textContent = `${bidders.length} registration${bidders.length === 1 ? "" : "s"}`;
+  wrap.appendChild(foot);
   return wrap;
 }
 

@@ -163,6 +163,70 @@ export async function fetchPropertyOffers(propertyId) {
   return data || { status: "empty" };
 }
 
+// WORKER-10: read the per-property listing entities (real Seller=Checker /
+// Broker=Maker + contact, live Active/InActive, approvals) from the Worker's
+// READ-ONLY admin scrape. Fail-soft like fetchPropertyOffers — never throws,
+// renders its own inline state instead of hijacking the sign-in panel.
+export async function fetchPropertyEntities(propertyId) {
+  let res;
+  try {
+    res = await fetch(
+      new URL(`entities?id=${encodeURIComponent(propertyId)}`, WORKER_URL).toString(),
+      { method: "GET", headers: { "Accept": "application/json" }, credentials: "include" },
+    );
+  } catch {
+    return { status: "auth_error" };
+  }
+  let data = null;
+  try { data = await res.json(); } catch {}
+  if (!res.ok) {
+    return { status: "error", error: data?.error || `Request failed (${res.status})` };
+  }
+  return data || { status: "empty" };
+}
+
+// WORKER-11: read the per-property auction registrations ("Bidders List")
+// from the Worker's READ-ONLY admin scrape. Online-Auction properties only;
+// fail-soft like fetchPropertyOffers.
+export async function fetchPropertyBidders(propertyId) {
+  let res;
+  try {
+    res = await fetch(
+      new URL(`bidders?id=${encodeURIComponent(propertyId)}`, WORKER_URL).toString(),
+      { method: "GET", headers: { "Accept": "application/json" }, credentials: "include" },
+    );
+  } catch {
+    return { status: "auth_error" };
+  }
+  let data = null;
+  try { data = await res.json(); } catch {}
+  if (!res.ok) {
+    return { status: "error", error: data?.error || `Request failed (${res.status})` };
+  }
+  return data || { status: "empty" };
+}
+
+// DATA-04: resolve a buyer/fuser id → name (+ contact) via the Worker's
+// READ-ONLY /admin/fuser/edit scrape. Used to name the highest bidder
+// (Online-Auction) / highest offerer (Make-An-Offer). Fail-soft.
+export async function fetchBuyer(buyerId) {
+  let res;
+  try {
+    res = await fetch(
+      new URL(`buyer?id=${encodeURIComponent(buyerId)}`, WORKER_URL).toString(),
+      { method: "GET", headers: { "Accept": "application/json" }, credentials: "include" },
+    );
+  } catch {
+    return { status: "auth_error" };
+  }
+  let data = null;
+  try { data = await res.json(); } catch {}
+  if (!res.ok) {
+    return { status: "error", error: data?.error || `Request failed (${res.status})` };
+  }
+  return data || { status: "empty" };
+}
+
 // Probe to see whether the API actually paginates. Called once at startup.
 // Returns true if page 2 returns a different first listing than page 1.
 export async function probePagination(firstListings) {
