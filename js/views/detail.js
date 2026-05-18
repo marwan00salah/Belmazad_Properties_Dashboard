@@ -869,6 +869,41 @@ function reportTextNote(text, danger) {
   return d;
 }
 
+// "NOT_STARTED" / "in-progress" → "Not Started" / "In Progress".
+function humanizeKey(k) {
+  return String(k).toLowerCase().replace(/[_\-]+/g, " ").trim()
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// A labelled sub-block inside the HubSpot card: small uppercase sub-heading
+// over a 2-col label/value grid (same row shape as section()'s <dl>). Returns
+// null when every row is empty, so the caller can skip rendering it entirely.
+function reportSubsection(title, rows) {
+  const filtered = rows.filter(([, v]) => v != null && v !== "");
+  if (!filtered.length) return null;
+  const box = document.createElement("div");
+  const h = document.createElement("h3");
+  h.className = "text-xs font-semibold text-ink-400 uppercase tracking-wider mb-2";
+  h.textContent = title;
+  const dl = document.createElement("dl");
+  dl.className = "grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2";
+  for (const [label, value] of filtered) {
+    const row = document.createElement("div");
+    row.className = "flex flex-col gap-0.5";
+    const dt = document.createElement("dt");
+    dt.className = "text-xs text-ink-500 font-medium uppercase tracking-wider";
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.className = "text-sm text-ink-900";
+    if (value instanceof HTMLElement) dd.appendChild(value);
+    else dd.textContent = value;
+    row.append(dt, dd);
+    dl.appendChild(row);
+  }
+  box.append(h, dl);
+  return box;
+}
+
 function stopReportPolling(id) {
   const h = reportPollers.get(id);
   if (h) clearTimeout(h);
@@ -951,6 +986,7 @@ function buildHubSpotReportSection(listing) {
   const status = slice && slice.status;
   const data = slice && slice.data;
   const rows = [];
+  let groups = null;
   let note = null;
   let footer = reportProvenance(slice);
   let refreshDisabled = false;
@@ -979,20 +1015,43 @@ function buildHubSpotReportSection(listing) {
     }
   } else if (status === "ready" && data) {
     const t = data.totals || {};
-    rows.push(["Contacts", fmtCount(t.contacts)]);
-    rows.push(["Deals", fmtCount(t.deals)]);
-    rows.push(["Open tasks", fmtCount(t.openTasks)]);
 
     const byBucket = (data.leadStatus && data.leadStatus.byBucket) || {};
+    const leadRows = [];
     for (const [key, label] of Object.entries(HS_LEAD_STATUS_BUCKET_LABELS)) {
       const n = byBucket[key];
       // Surface unmapped only when non-zero; skip other empty buckets.
       if (!Number.isFinite(n) || n === 0) continue;
-      rows.push([label, fmtCount(n)]);
+      leadRows.push([label, fmtCount(n)]);
     }
 
-    for (const s of (data.dealsByStage || [])) {
-      rows.push([`Deal · ${s.label || s.stageId || "Stage"}`, fmtCount(s.count)]);
+    const dealRows = (data.dealsByStage || [])
+      .map(s => [s.label || s.stageId || "Stage", fmtCount(s.count)]);
+
+    const taskBy = (data.tasks && data.tasks.byStatus) || {};
+    const taskRows = Object.entries(taskBy)
+      .filter(([, v]) => Number.isFinite(v) && v > 0)
+      .map(([k, v]) => [humanizeKey(k), fmtCount(v)]);
+
+    // Group the three data domains into scannable sub-sections instead of one
+    // flat <dl>. Totals stays a roll-up; each reportSubsection() self-skips
+    // when it has no rows (DETAIL-25).
+    groups = document.createElement("div");
+    groups.className = "space-y-5";
+    for (const sub of [
+      reportSubsection("Totals", [
+        ["Contacts", fmtCount(t.contacts)],
+        ["Deals", fmtCount(t.deals)],
+        ["Open tasks", fmtCount(t.openTasks)],
+      ]),
+      reportSubsection("Leads by status", leadRows),
+      reportSubsection("Deals by stage", dealRows),
+      reportSubsection("Tasks", taskRows),
+    ]) if (sub) groups.appendChild(sub);
+
+    if (!groups.childElementCount) {
+      note = reportTextNote("Report computed, but there's no data to display yet.");
+      groups = null;
     }
 
     if (Number.isFinite(slice.cooldownRemainingMs) && slice.cooldownRemainingMs > 0) {
@@ -1011,6 +1070,7 @@ function buildHubSpotReportSection(listing) {
 
   const wrap = section("HubSpot reports", rows);
 
+  if (groups) wrap.appendChild(groups);
   if (note) wrap.appendChild(note);
 
   const foot = document.createElement("div");
