@@ -8,7 +8,7 @@ export function statusBadge(kind) {
     soon:       { label: "Ending soon", cls: "bg-amber-50 text-amber-700 ring-1 ring-amber-200",       dot: "bg-warn" },
     urgent:     { label: "Urgent",      cls: "bg-red-50 text-red-700 ring-1 ring-red-200",             dot: "bg-urgent animate-pulse" },
     sold:       { label: "Sold",        cls: "bg-ink-100 text-ink-600 ring-1 ring-ink-200",            dot: "bg-ink-400" },
-    coming:     { label: "Coming soon", cls: "bg-accent-50 text-accent-700 ring-1 ring-accent-100",    dot: "bg-accent-600" },
+    coming:     { label: "Coming soon", cls: "bg-brand-50 text-brand-700 ring-1 ring-brand-100",    dot: "bg-brand-600" },
     ended:      { label: "Ended",       cls: "bg-red-50 text-red-700 ring-1 ring-red-200",             dot: "bg-urgent" },
   };
   const v = map[kind];

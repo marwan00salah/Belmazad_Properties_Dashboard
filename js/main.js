@@ -3,22 +3,34 @@ import { getState, setState, subscribe } from "./state.js";
 import { initRouter, navigate } from "./router.js";
 import { renderListings } from "./views/listings.js";
 import { renderDetail } from "./views/detail.js";
+import { WORKER_URL } from "./config.js";
 
 const app = document.getElementById("app");
 
 function renderHeader() {
-  const { loading, lastUpdated, error } = getState();
+  const { loading, lastUpdated, error, userEmail } = getState();
   const header = document.createElement("header");
-  header.className = "sticky top-0 z-30 bg-white/85 backdrop-blur supports-[backdrop-filter]:bg-white/70 border-b border-ink-200/80";
+  header.className = "sticky top-0 z-30 bg-white/85 backdrop-blur supports-[backdrop-filter]:bg-white/70 border-b border-ink-200/80 shadow-sm";
   const inner = document.createElement("div");
-  inner.className = "mx-auto w-full max-w-7xl px-4 md:px-6 py-3 flex items-center justify-between gap-3";
+  inner.className = "w-full px-4 md:px-6 py-3 flex items-center justify-between gap-3";
+
+  const left = document.createElement("div");
+  left.className = "flex items-center gap-7";
 
   const brand = document.createElement("a");
   brand.href = "#/";
-  brand.className = "flex items-center gap-2 font-semibold text-ink-900 hover:text-ink-700 transition";
-  brand.innerHTML = `
-    <span class="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-accent-700 text-white text-sm font-bold">B</span>
-    <span>Belmazad <span class="text-ink-400 font-normal">— Properties</span></span>`;
+  brand.className = "text-3xl font-extrabold tracking-tight text-ink-900 hover:text-ink-700 transition";
+  brand.textContent = "Belmazad";
+
+  const nav = document.createElement("nav");
+  nav.className = "hidden sm:flex items-center gap-6";
+  const propTab = document.createElement("a");
+  propTab.href = "#/";
+  propTab.className = "relative text-sm font-semibold text-brand-600 hover:text-brand-700 transition";
+  propTab.innerHTML = `Properties<span class="absolute left-0 right-0 -bottom-3 h-0.5 bg-brand-600"></span>`;
+  nav.append(propTab);
+
+  left.append(brand, nav);
 
   const right = document.createElement("div");
   right.className = "flex items-center gap-3";
@@ -39,10 +51,39 @@ function renderHeader() {
   btn.disabled = !!loading;
   btn.addEventListener("click", () => refresh());
 
-  right.append(stamp, btn);
-  inner.append(brand, right);
+  if (userEmail) {
+    const userBox = document.createElement("div");
+    userBox.className = "hidden sm:flex items-center gap-2";
+    const chip = document.createElement("span");
+    chip.className = "text-xs font-semibold text-ink-500 bg-ink-100 px-2.5 py-1 rounded-lg max-w-[16rem] truncate";
+    chip.textContent = userEmail;
+    chip.title = userEmail;
+    const avatar = document.createElement("span");
+    avatar.className = "inline-flex h-8 w-8 items-center justify-center rounded-full bg-brand-100 text-brand-700 text-xs font-bold shrink-0";
+    avatar.textContent = initialsFromEmail(userEmail);
+    avatar.setAttribute("aria-hidden", "true");
+    const signOut = document.createElement("a");
+    signOut.href = `${WORKER_URL}cdn-cgi/access/logout`;
+    signOut.title = "Sign out";
+    signOut.setAttribute("aria-label", "Sign out");
+    signOut.className = "inline-flex items-center justify-center h-8 w-8 rounded-lg text-ink-400 hover:text-urgent-600 hover:bg-ink-100 transition";
+    signOut.innerHTML = `<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M3 4a1 1 0 011-1h6a1 1 0 110 2H5v10h5a1 1 0 110 2H4a1 1 0 01-1-1V4zm10.293 2.293a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 01-1.414-1.414L14.586 11H9a1 1 0 110-2h5.586l-1.293-1.293a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>`;
+    userBox.append(chip, avatar, signOut);
+    right.append(stamp, btn, userBox);
+  } else {
+    right.append(stamp, btn);
+  }
+
+  inner.append(left, right);
   header.appendChild(inner);
   return header;
+}
+
+function initialsFromEmail(email) {
+  const local = String(email || "").split("@")[0] || "";
+  const parts = local.split(/[.\-_+]+/).filter(Boolean);
+  const letters = (parts.length >= 2 ? parts[0][0] + parts[1][0] : local.slice(0, 2));
+  return letters.toUpperCase() || "?";
 }
 
 function relativeFromNow(ts) {

@@ -1,5 +1,6 @@
 import { formatNumber, timeUntil, isTrue } from "../format.js";
 import { patchFilters } from "../state.js";
+import { attachCursorShadow } from "../cursorShadow.js";
 
 function computeStats(listings) {
   let live = 0, endingSoon = 0, bids = 0;
@@ -24,16 +25,17 @@ function computeStats(listings) {
 
 function tile({ label, value, accent, onClick }) {
   const el = document.createElement(onClick ? "button" : "div");
-  el.className = "text-left rounded-xl bg-white shadow-sm p-4 ring-1 ring-ink-100" +
-    (onClick ? " hover:ring-accent-300 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 transition cursor-pointer" : "");
+  el.className = "text-left rounded-2xl bg-white shadow-sm p-4 border border-ink-100 transition hover:shadow-md" +
+    (onClick ? " hover:border-brand-300 hover:-translate-y-0.5 will-change-transform focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 cursor-pointer" : "");
   el.innerHTML = `
-    <div class="text-xs uppercase tracking-wider text-ink-500 font-medium">${label}</div>
-    <div class="mt-1 text-2xl md:text-3xl font-semibold ${accent || "text-ink-900"} tabular-nums count-up" data-target="${value}">0</div>
+    <div class="text-[10px] font-bold text-ink-400 uppercase tracking-widest">${label}</div>
+    <div class="mt-2 text-3xl font-bold ${accent || "text-ink-900"} tabular-nums count-up" data-target="${value}">0</div>
   `;
   if (onClick) {
     el.type = "button";
     el.addEventListener("click", onClick);
   }
+  attachCursorShadow(el);
   return el;
 }
 

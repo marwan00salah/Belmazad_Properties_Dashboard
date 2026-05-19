@@ -9,6 +9,12 @@ BELMAZAD_API_INTEGRATION_REFERENCE_FINAL.md
 lead-status-segmentation
 .claude/
 
+# ── Redesign working artifacts (visual contract + static mockups used to
+#    drive the Hybrid redesign; not part of the deployed site).
+DESIGN_SYSTEM.md
+mockup.html
+mockup-grid.html
+
 # ── Worker source + deploy notes (the Worker runs on Cloudflare; this is
 #    the source of truth but doesn't need to be public).
 proxy/

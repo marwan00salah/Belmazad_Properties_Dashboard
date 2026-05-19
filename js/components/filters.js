@@ -33,22 +33,78 @@ function uniqueDecoded(list, key, lookupKey) {
     .sort((a, b) => a.label.localeCompare(b.label));
 }
 
-function selectField({ label, value, options, onChange }) {
-  const wrap = document.createElement("label");
+const DROPDOWN_BTN_CLS = "inline-flex items-center gap-2 rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm font-medium text-ink-800 shadow-sm hover:bg-ink-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 transition";
+const CHEVRON = `<svg width="12" height="12" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="text-ink-400 shrink-0"><path d="M5 7l5 6 5-6z"/></svg>`;
+
+// Shared button-with-popup-menu. Same open/close (pick / outside-click /
+// Escape) + __cleanup that drops the global listeners if torn down while open.
+// `buttonInner(active)` returns the trigger's innerHTML for the active option.
+function buildDropdown({ value, options, onPick, buttonInner, menuAlign = "right" }) {
+  const active = options.find(o => o.value === value) || options[0];
+
+  const wrap = document.createElement("div");
+  wrap.className = "relative";
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.setAttribute("aria-haspopup", "menu");
+  btn.setAttribute("aria-expanded", "false");
+  btn.className = DROPDOWN_BTN_CLS;
+  btn.innerHTML = buttonInner(active);
+
+  const menu = document.createElement("div");
+  menu.setAttribute("role", "menu");
+  menu.className = `absolute ${menuAlign === "left" ? "left-0" : "right-0"} mt-1 z-30 min-w-[12rem] max-h-72 overflow-auto rounded-lg border border-ink-200 bg-white shadow-lg py-1 hidden`;
+  for (const o of options) {
+    const opt = document.createElement("button");
+    opt.type = "button";
+    opt.setAttribute("role", "menuitem");
+    opt.className = "block w-full text-left px-3 py-1.5 text-sm transition " +
+      (o.value === active.value ? "text-brand-700 font-semibold bg-brand-50" : "text-ink-700 hover:bg-ink-50");
+    opt.textContent = o.label;
+    opt.addEventListener("click", () => { setOpen(false); onPick(o.value); });
+    menu.appendChild(opt);
+  }
+
+  let open = false;
+  const onDoc = (e) => { if (!wrap.contains(e.target)) setOpen(false); };
+  const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+  function setOpen(v) {
+    if (open === v) return;
+    open = v;
+    menu.classList.toggle("hidden", !open);
+    btn.setAttribute("aria-expanded", String(open));
+    if (open) {
+      document.addEventListener("click", onDoc, true);
+      document.addEventListener("keydown", onKey);
+    } else {
+      document.removeEventListener("click", onDoc, true);
+      document.removeEventListener("keydown", onKey);
+    }
+  }
+  btn.addEventListener("click", (e) => { e.stopPropagation(); setOpen(!open); });
+
+  wrap.append(btn, menu);
+  wrap.__cleanup = () => setOpen(false);
+  return wrap;
+}
+
+// Stacked field-label + dropdown button — drop-in replacement for the old
+// native <select> filter (same `value`, same option list, same onPick).
+function filterDropdown({ label, value, options, onPick }) {
+  const wrap = document.createElement("div");
   wrap.className = "flex flex-col gap-1 text-xs text-ink-500";
   wrap.innerHTML = `<span class="font-medium">${label}</span>`;
-  const sel = document.createElement("select");
-  sel.className = "rounded-lg border border-ink-200 bg-white pl-3 pr-8 py-2 text-sm text-ink-800 shadow-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100 transition";
-  sel.innerHTML = options.map(o =>
-    `<option value="${o.value}" ${o.value === value ? "selected" : ""}>${o.label}</option>`
-  ).join("");
-  sel.addEventListener("change", () => onChange(sel.value));
-  wrap.appendChild(sel);
+  wrap.appendChild(buildDropdown({
+    value, options, onPick,
+    menuAlign: "left",
+    buttonInner: (a) => `<span class="truncate max-w-[12rem]">${a.label}</span>${CHEVRON}`,
+  }));
   return wrap;
 }
 
 export function renderFilters(listings) {
-  const { filters, sort } = getState();
+  const { filters } = getState();
   const wrap = document.createElement("section");
   wrap.className = "sticky top-[68px] z-20 -mx-4 px-4 md:mx-0 md:px-0 bg-ink-50/90 backdrop-blur supports-[backdrop-filter]:bg-ink-50/70 pb-3 pt-3 ring-1 ring-transparent";
 
@@ -62,9 +118,9 @@ export function renderFilters(listings) {
   const search = document.createElement("input");
   search.type = "search";
   search.id = "filter-search";
-  search.placeholder = "Name, city, or address…";
+  search.placeholder = "Name, city, address, or ID…";
   search.value = filters.search;
-  search.className = "rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm text-ink-800 shadow-sm focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100 transition";
+  search.className = "rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm text-ink-800 shadow-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-100 transition";
   let debounce;
   search.addEventListener("input", () => {
     clearTimeout(debounce);
@@ -73,35 +129,25 @@ export function renderFilters(listings) {
   searchWrap.appendChild(search);
   row.appendChild(searchWrap);
 
-  const sellerTypes = uniqueDecoded(listings, "sellerType", "sellerType");
-  row.appendChild(selectField({
+  row.appendChild(filterDropdown({
     label: "Seller type",
     value: filters.sellerType,
-    options: [{ value: "all", label: "All seller types" }, ...sellerTypes],
-    onChange: (v) => patchFilters({ sellerType: v }),
+    options: [{ value: "all", label: "All seller types" }, ...uniqueDecoded(listings, "sellerType", "sellerType")],
+    onPick: (v) => patchFilters({ sellerType: v }),
   }));
 
-  const auctionTypes = unique(listings, "auctionType");
-  row.appendChild(selectField({
+  row.appendChild(filterDropdown({
     label: "Auction type",
     value: filters.auctionType,
-    options: [{ value: "all", label: "All types" }, ...auctionTypes.map(c => ({ value: c, label: c }))],
-    onChange: (v) => patchFilters({ auctionType: v }),
+    options: [{ value: "all", label: "All types" }, ...unique(listings, "auctionType").map(c => ({ value: c, label: c }))],
+    onPick: (v) => patchFilters({ auctionType: v }),
   }));
 
-  const propertyTypes = uniqueDecoded(listings, "propertyType", "propertyType");
-  row.appendChild(selectField({
+  row.appendChild(filterDropdown({
     label: "Property type",
     value: filters.propertyType,
-    options: [{ value: "all", label: "All property types" }, ...propertyTypes],
-    onChange: (v) => patchFilters({ propertyType: v }),
-  }));
-
-  row.appendChild(selectField({
-    label: "Sort by",
-    value: sort,
-    options: SORTS.map(s => ({ value: s.id, label: s.label })),
-    onChange: (v) => setState({ sort: v }),
+    options: [{ value: "all", label: "All property types" }, ...uniqueDecoded(listings, "propertyType", "propertyType")],
+    onPick: (v) => patchFilters({ propertyType: v }),
   }));
 
   wrap.appendChild(row);
@@ -125,10 +171,22 @@ export function renderFilters(listings) {
 
 function chip(label, onRemove) {
   const el = document.createElement("button");
-  el.className = "inline-flex items-center gap-1.5 rounded-full bg-accent-50 text-accent-700 ring-1 ring-accent-100 px-2.5 py-1 text-xs font-medium hover:bg-accent-100 transition";
-  el.innerHTML = `${label}<span aria-hidden="true" class="text-accent-700/70">×</span>`;
+  el.className = "inline-flex items-center gap-1.5 rounded-full bg-brand-50 text-brand-700 ring-1 ring-brand-100 px-2.5 py-1 text-xs font-medium hover:bg-brand-100 transition";
+  el.innerHTML = `${label}<span aria-hidden="true" class="text-brand-700/70">×</span>`;
   el.addEventListener("click", onRemove);
   return el;
+}
+
+// Sort control — same SORTS + setState({ sort }), now a thin wrapper over the
+// shared buildDropdown (was a ~55-line duplicate of the same state machine).
+const SORT_ICON = `<svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M5 7l5-5 5 5H5zM5 13l5 5 5-5H5z"/></svg>`;
+export function sortDropdown(currentSort) {
+  return buildDropdown({
+    value: currentSort,
+    options: SORTS.map(s => ({ value: s.id, label: s.label })),
+    onPick: (v) => setState({ sort: v }),
+    buttonInner: (a) => `${SORT_ICON}<span>Sort: ${a.label}</span>${CHEVRON}`,
+  });
 }
 
 function activeChips(filters) {

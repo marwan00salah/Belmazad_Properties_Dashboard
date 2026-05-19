@@ -3,33 +3,201 @@ import { money, formatNumber, formatDate, formatDateTime, timeUntil, daysSince, 
 import { decode, HS_LEAD_STATUS_BUCKET_LABELS } from "../lookups.js";
 import { statusBadge, listingStatusKinds } from "../components/statusBadge.js";
 import { subscribeCountdown } from "../countdown.js";
+import { attachCursorShadow } from "../cursorShadow.js";
 import { getState, setPropertyReport, setPropertyOffers, setPropertyEntities, setPropertyBidders, setBuyer } from "../state.js";
 import { initiateAuction, fetchPropertyReport, triggerPropertyReportRefresh, probeBooklet, fetchPropertyOffers, fetchPropertyEntities, fetchPropertyBidders, fetchBuyer } from "../api.js";
 
-function section(title, rows) {
-  const wrap = document.createElement("section");
-  wrap.className = "rounded-xl bg-white shadow-sm ring-1 ring-ink-100 p-5 md:p-6";
-  const h = document.createElement("h2");
-  h.className = "text-sm font-semibold text-ink-500 uppercase tracking-wider mb-4";
-  h.textContent = title;
+// One label/value row: <div><dt/><dd/></div>. dd takes an HTMLElement
+// (appended) or text (textContent).
+function kvRow(label, value) {
+  const row = document.createElement("div");
+  row.className = "flex flex-col gap-0.5";
+  const dt = document.createElement("dt");
+  dt.className = "text-xs text-ink-500 font-medium uppercase tracking-wider";
+  dt.textContent = label;
+  const dd = document.createElement("dd");
+  dd.className = "text-sm text-ink-900";
+  if (value instanceof HTMLElement) dd.appendChild(value);
+  else dd.textContent = value;
+  row.append(dt, dd);
+  return row;
+}
+
+// <dl> of kvRows, skipping null/"" values. `columns:2` → responsive 1→2 col
+// (center cards); `columns:1` → single column (narrow side rails). `gapY`
+// kept as whole literal tokens so the Tailwind CDN JIT picks them up.
+function kvList(rows, { columns = 2, gapY = 3 } = {}) {
   const dl = document.createElement("dl");
-  dl.className = "grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3";
+  const colCls = columns === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1";
+  const gapCls = gapY === 2 ? "gap-y-2" : "gap-y-3";
+  dl.className = `grid ${colCls} gap-x-6 ${gapCls}`;
   for (const [label, value] of rows) {
     if (value == null || value === "") continue;
-    const row = document.createElement("div");
-    row.className = "flex flex-col gap-0.5";
-    const dt = document.createElement("dt");
-    dt.className = "text-xs text-ink-500 font-medium uppercase tracking-wider";
-    dt.textContent = label;
-    const dd = document.createElement("dd");
-    dd.className = "text-sm text-ink-900";
-    if (value instanceof HTMLElement) dd.appendChild(value);
-    else dd.textContent = value;
-    row.append(dt, dd);
-    dl.appendChild(row);
+    dl.appendChild(kvRow(label, value));
   }
-  wrap.append(h, dl);
+  return dl;
+}
+
+// White card shell: <section> + <h2> title (no body). Shared by section()
+// and the lazily-hydrated cards (Offers / Bidders / Seller).
+// Unified card chrome (matches the HubSpot Performance card): a header strip
+// (bold ink-900 title, light divider) over a padded body. Content goes into
+// `cardBody(wrap)`; the header's right side is `wrap._header` (for pills etc).
+function cardShell(title) {
+  const wrap = document.createElement("section");
+  wrap.className = "rounded-2xl bg-white shadow-sm border border-ink-100 overflow-hidden";
+  const header = document.createElement("div");
+  header.className = "px-5 py-4 border-b border-ink-50 bg-ink-50/50 flex items-center justify-between gap-3 flex-wrap";
+  const h = document.createElement("h2");
+  h.className = "text-base font-bold text-ink-900";
+  h.textContent = title;
+  header.appendChild(h);
+  const body = document.createElement("div");
+  body.className = "p-5 md:p-6";
+  wrap.append(header, body);
+  wrap._header = header;
+  wrap._body = body;
   return wrap;
+}
+const cardBody = (s) => s._body || s;
+
+// Full "Xd Yh Zm Ws" countdown string (detail Timing); falls back to the
+// short timeUntil text when there's no day/h/m/s breakdown.
+function dhms(t) {
+  if (!t || t.days == null) return (t && t.text) || "—";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${t.days}d ${p(t.hours)}h ${p(t.minutes)}m ${p(t.seconds)}s`;
+}
+
+// Dark "Hybrid" card (mockup Auction Timing): inverted palette + a soft
+// decorative blur blob. Content should be appended into the returned node.
+function darkCardShell(title) {
+  const wrap = document.createElement("section");
+  wrap.className = "rounded-2xl bg-ink-900 shadow-lg text-white relative overflow-hidden p-5";
+  const blob = document.createElement("div");
+  blob.className = "absolute -right-8 -top-8 w-24 h-24 bg-brand-500/20 rounded-full blur-2xl pointer-events-none";
+  const h = document.createElement("h2");
+  h.className = "relative z-10 text-base font-bold text-white mb-4";
+  h.textContent = title;
+  wrap.append(blob, h);
+  return wrap;
+}
+
+// Shared status classifier — single source of truth for STYLE-05's
+// negative-first logic. Used by offerStatusPill() AND the left-border accent
+// on Offers/Registrations rows so the pill and the bar can never disagree.
+function statusKind(text) {
+  const t = String(text || "").trim();
+  if (/un-?approv|not\s*approv|unpaid|not\s*paid|reject|declin|cancel|fail|inactive|void|^no$/i.test(t)) return "negative";
+  if (/pending|await|in\s*review|processing|on\s*hold/i.test(t)) return "pending";
+  if (/approv|accept|confirm|complete|success|paid|active|verified|done|^yes$/i.test(t)) return "positive";
+  return "neutral";
+}
+const STATUS_PILL_CLS = {
+  negative: "bg-urgent/10 text-urgent",
+  pending:  "bg-amber-100 text-amber-700",
+  positive: "bg-emerald-100 text-emerald-700",
+  neutral:  "bg-ink-100 text-ink-600",
+};
+const STATUS_BORDER_CLS = {
+  negative: "bg-urgent-500",
+  pending:  "bg-amber-400",
+  positive: "bg-insight-500",
+  neutral:  "bg-ink-300",
+};
+
+function section(title, rows) {
+  const wrap = cardShell(title);
+  cardBody(wrap).appendChild(kvList(rows));
+  return wrap;
+}
+
+// Mockup "Property Specs": label/value rows with hairline separators; the
+// Category + Featured values render as small tags. Null/"" rows are skipped.
+function buildSpecsCard(listing) {
+  const rows = [
+    ["Property category", decode("propertyType", listing.propertyType)],
+    ["Property type",     listing.SUB_PROPERTY_TYPE],
+    ["Auction type",      listing.auctionType],
+    ["Payment terms",     decode("purchaseStatus", listing.purchaseStatus)],
+    ["Area (m²)",         listing.homeSquareFootage ? `${formatNumber(listing.homeSquareFootage)} m²` : null],
+    ["Bedrooms",          listing.bedrooms],
+    ["Bathrooms",         listing.baths],
+    ["Lot size",          listing.lotSize],
+    ["Year built",        listing.yearBuilt],
+    ["Occupancy",         decode("propertyOccupancyStatus", listing.propertyOccupancyStatus)],
+    ["Tenure",            decode("tenure", listing.tenure)],
+    ["Land use",          decode("land_use", listing.land_use)],
+    ["Property label",    decode("propertyLabel", listing.propertyLabel)],
+    ["Utilities",         decode("utilities_connected", listing.utilities_connected)],
+    ["Featured",          decode("featured", listing.featured)],
+  ].filter(([, v]) => v != null && v !== "");
+
+  const wrap = cardShell("Specifications");
+
+  // Live listing status pill, right-aligned in the unified header strip
+  // (status from the lazy /entities scrape; appears once it resolves).
+  const eslice = getState().propertyEntities[String(listing.propertyId || "")];
+  const liveStatus = eslice && eslice.status === "ok" ? eslice.liveStatus : null;
+  if (liveStatus) {
+    const live = /^active$/i.test(liveStatus);
+    const pill = document.createElement("span");
+    pill.className = `inline-flex items-center gap-1.5 shrink-0 ${live ? "bg-insight-50 text-insight-700" : "bg-ink-100 text-ink-600"} text-[10px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider`;
+    pill.innerHTML = `<span class="h-1.5 w-1.5 rounded-full ${live ? "bg-insight-500" : "bg-ink-400"}"></span> ${live ? "Active Listing" : escapeHtml(liveStatus)}`;
+    wrap._header.appendChild(pill);
+  }
+
+  const list = document.createElement("div");
+  list.className = "space-y-3";
+  rows.forEach(([label, value], i) => {
+    const row = document.createElement("div");
+    row.className = "flex justify-between items-center gap-3" +
+      (i < rows.length - 1 ? " pb-2 border-b border-ink-50" : "");
+    const k = document.createElement("span");
+    k.className = "text-sm text-ink-500 shrink-0";
+    k.textContent = label;
+    const v = document.createElement("span");
+    if (label === "Property category")
+      v.className = "text-sm font-semibold text-ink-700 bg-ink-50 px-2 py-0.5 rounded text-right";
+    else if (label === "Featured")
+      v.className = "text-sm font-bold text-brand-600 bg-brand-50 px-2 py-0.5 rounded text-right";
+    else if (label === "Payment terms")
+      v.className = /finance/i.test(String(value))
+        ? "text-sm font-bold text-white bg-gradient-to-r from-brand-600 to-ink-900 px-2.5 py-0.5 rounded-full text-right shadow-sm"
+        : "text-sm font-semibold text-ink-600 bg-ink-100 px-2 py-0.5 rounded text-right";
+    else
+      v.className = "text-sm font-bold text-ink-900 text-right break-words";
+    v.textContent = String(value);
+    row.append(k, v);
+    list.appendChild(row);
+  });
+  cardBody(wrap).appendChild(list);
+  return wrap;
+}
+
+// Lazy one-shot KV/scrape hydrator factory. Every per-property card
+// (report/offers/entities/buyer/bidders) hydrates the same way: dedupe by id
+// while a fetch is in flight, then setState with the record (or {empty}). The
+// .then() always fires after render() completes, so this never setStates
+// during render.
+function makeHydrator(fetchFn, setFn) {
+  const inFlight = new Set();
+  return (id) => {
+    if (inFlight.has(id)) return;
+    inFlight.add(id);
+    fetchFn(id).then((rec) => {
+      inFlight.delete(id);
+      setFn(id, rec || { status: "empty" });
+    });
+  };
+}
+
+// `startBidding`/`endBidding` arrive as "YYYY-MM-DD HH:MM:SS"; normalise the
+// space to "T" so it parses cross-browser. Returns a valid Date or null.
+function parseListingDate(raw) {
+  if (!raw) return null;
+  const d = new Date(String(raw).replace(" ", "T"));
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 function renderNotFound(propertyId) {
@@ -38,8 +206,24 @@ function renderNotFound(propertyId) {
   wrap.innerHTML = `
     <div class="text-ink-900 text-lg font-semibold mb-1">Listing not found</div>
     <p class="text-ink-500 text-sm mb-4">No listing with ID <code class="px-1.5 py-0.5 rounded bg-ink-100 text-ink-700">${propertyId}</code> in the current dataset.</p>
-    <a href="#/" class="inline-flex items-center gap-2 rounded-lg bg-accent-700 hover:bg-accent-800 text-white px-4 py-2 text-sm font-medium transition shadow-sm">Back to listings</a>`;
+    <a href="#/" class="inline-flex items-center gap-2 rounded-lg bg-brand-700 hover:bg-brand-800 text-white px-4 py-2 text-sm font-medium transition shadow-sm">Back to listings</a>`;
   return wrap;
+}
+
+// Hero overlay pill (mockup): solid, bold, uppercase, backdrop-blurred.
+const HERO_PILL = {
+  live:   { t: "Live",        c: "bg-insight-500" },
+  soon:   { t: "Ending Soon", c: "bg-urgent-500" },
+  urgent: { t: "Ending Soon", c: "bg-urgent-500" },
+  coming: { t: "Coming Soon", c: "bg-brand-500" },
+  ended:  { t: "Ended",       c: "bg-ink-700" },
+  sold:   { t: "Sold",        c: "bg-ink-900" },
+};
+function heroPill(text, colorCls) {
+  const s = document.createElement("span");
+  s.className = `${colorCls} bg-opacity-90 text-white text-[10px] font-bold px-2 py-1 rounded shadow-sm uppercase tracking-wider backdrop-blur-sm`;
+  s.textContent = text;
+  return s;
 }
 
 export function renderDetail(propertyId) {
@@ -57,118 +241,122 @@ export function renderDetail(propertyId) {
   }
 
   const root = document.createElement("div");
-  // Outer is fluid; the inner flex centers the three children with the
-  // center main capped at max-w-5xl. Side rails sit in their own
-  // containers alongside the center.
-  root.className = "flex-1 w-full px-4 md:px-6 py-4 md:py-6 fade-in";
+  root.className = "flex-1 w-full fade-in";
 
-  // ── Build the outer flex layout first (three independent containers)
+  // Inner wrapper: mockup's max-w-[1400px] page column.
+  const inner = document.createElement("div");
+  inner.className = "mx-auto max-w-[1400px] w-full px-4 sm:px-6 lg:px-8 py-6";
+
+  // ── 12-col grid (mockup): 3 / 6 / 3. Mobile order keeps the original
+  // intent — right rail (Timing/Offers) first, then center, then left rail.
   const layout = document.createElement("div");
-  layout.className = "mx-auto flex flex-wrap items-start justify-center gap-4";
+  layout.className = "grid grid-cols-1 lg:grid-cols-12 gap-6 items-start";
 
   const leftRail = document.createElement("aside");
-  // Below xl: full-width, stacks above the center (mobile order 2 — after Offers/Timing).
-  // xl+: 288 px fixed, sticky on the left of the center.
-  leftRail.className = "w-full xl:w-72 xl:flex-shrink-0 order-2 xl:order-1 xl:sticky xl:top-20 xl:self-start space-y-4";
+  leftRail.className = "lg:col-span-3 order-3 lg:order-1 lg:sticky lg:top-24 lg:self-start space-y-6";
 
   const center = document.createElement("main");
-  // The "main container" — stays at max-w-5xl as originally designed.
-  center.className = "w-full max-w-5xl min-w-0 order-3 xl:order-2 space-y-4";
+  center.className = "lg:col-span-6 order-2 lg:order-2 min-w-0 space-y-6";
 
   const rightRail = document.createElement("aside");
-  // Below xl: full-width, stacks first (mobile order 1 — Offers/Timing at top).
-  // xl+: 288 px fixed, sticky on the right of the center.
-  rightRail.className = "w-full xl:w-72 xl:flex-shrink-0 order-1 xl:order-3 xl:sticky xl:top-20 xl:self-start space-y-4";
+  rightRail.className = "lg:col-span-3 order-1 lg:order-3 lg:sticky lg:top-24 lg:self-start space-y-6";
 
   layout.append(leftRail, center, rightRail);
 
-  // ── Back nav + external links (DETAIL-03, DETAIL-04)
-  // Sits ABOVE the 3-column layout so the side rails align with the hero
-  // image top, not the nav row.
-  const navWrap = document.createElement("div");
-  navWrap.className = "mx-auto w-full max-w-5xl mb-4";
-  const nav = document.createElement("nav");
-  nav.className = "flex items-center justify-between gap-2 text-sm";
+  // ── Breadcrumb header (mockup): "← Back to Listings | Property #id"
+  // on the left; "View Public Page" + "Edit in Admin" on the right.
+  const crumb = document.createElement("div");
+  crumb.className = "flex flex-wrap items-center justify-between gap-3";
 
-  // DETAIL-20: pill-styled back link so it reads as a primary nav button,
-  // not a muted inline link.
+  const crumbLeft = document.createElement("div");
+  crumbLeft.className = "flex items-center gap-3 text-sm";
   const back = document.createElement("a");
   back.href = "#/";
-  back.className = "inline-flex items-center gap-1.5 rounded-lg bg-white ring-1 ring-ink-200 hover:bg-ink-50 hover:ring-ink-300 hover:text-ink-900 transition px-3 py-1.5 text-ink-700 font-medium shadow-sm";
-  back.innerHTML = `<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M12.78 5.22a.75.75 0 010 1.06L9.06 10l3.72 3.72a.75.75 0 11-1.06 1.06l-4.25-4.25a.75.75 0 010-1.06l4.25-4.25a.75.75 0 011.06 0z" clip-rule="evenodd"/></svg> Back to listings`;
+  back.className = "inline-flex items-center gap-1.5 text-brand-600 font-semibold hover:underline transition";
+  back.innerHTML = `<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M12.78 5.22a.75.75 0 010 1.06L9.06 10l3.72 3.72a.75.75 0 11-1.06 1.06l-4.25-4.25a.75.75 0 010-1.06l4.25-4.25a.75.75 0 011.06 0z" clip-rule="evenodd"/></svg> Back to Listings`;
+  const sep = document.createElement("span");
+  sep.className = "text-ink-300";
+  sep.textContent = "|";
+  const crumbId = document.createElement("span");
+  crumbId.className = "font-bold text-ink-900";
+  crumbId.textContent = `Property #${listing.propertyId}`;
+  crumbLeft.append(back, sep, crumbId);
 
-  const externals = document.createElement("div");
-  externals.className = "flex items-center gap-2";
-
-  const adminLink = document.createElement("a");
-  adminLink.href = `https://belmazad.com/admin/property/add/${encodeURIComponent(listing.propertyId)}`;
-  adminLink.target = "_blank";
-  adminLink.rel = "noopener noreferrer";
-  adminLink.className = "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-accent-700 hover:bg-accent-50 hover:text-accent-800 transition font-medium";
-  adminLink.innerHTML = `<svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10 1l7 3v6c0 4.5-3 8-7 9-4-1-7-4.5-7-9V4l7-3zm0 5a1.5 1.5 0 100 3 1.5 1.5 0 000-3zm-3 6.5a3 3 0 016 0V13H7v-.5z" clip-rule="evenodd"/></svg> View on admin <span aria-hidden="true">↗</span>`;
-
+  const crumbRight = document.createElement("div");
+  crumbRight.className = "flex items-center gap-3";
   const publicLink = document.createElement("a");
   publicLink.href = `https://belmazad.com/auction/property/${encodeURIComponent(listing.propertyId)}`;
   publicLink.target = "_blank";
   publicLink.rel = "noopener noreferrer";
-  publicLink.className = "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-accent-700 hover:bg-accent-50 hover:text-accent-800 transition font-medium";
-  publicLink.innerHTML = `<svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M11 3a1 1 0 100 2h2.586l-6.293 6.293a1 1 0 101.414 1.414L15 6.414V9a1 1 0 102 0V4a1 1 0 00-1-1h-5z"/><path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z"/></svg> View on belmazad.com <span aria-hidden="true">↗</span>`;
+  publicLink.className = "inline-flex items-center gap-1.5 rounded-xl bg-white border border-ink-200 px-4 py-2 text-sm font-semibold text-ink-700 hover:bg-ink-50 shadow-sm transition";
+  publicLink.innerHTML = `View Public Page <span aria-hidden="true">↗</span>`;
+  const adminLink = document.createElement("a");
+  adminLink.href = `https://belmazad.com/admin/property/add/${encodeURIComponent(listing.propertyId)}`;
+  adminLink.target = "_blank";
+  adminLink.rel = "noopener noreferrer";
+  adminLink.className = "inline-flex items-center gap-1.5 rounded-xl bg-brand-600 border border-brand-700 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 shadow-sm transition";
+  adminLink.innerHTML = `Edit in Admin <span aria-hidden="true">↗</span>`;
+  crumbRight.append(publicLink, adminLink);
 
-  externals.append(adminLink, publicLink);
-  nav.append(back, externals);
-  navWrap.appendChild(nav);
-  root.appendChild(navWrap);
-  root.appendChild(layout);
+  crumb.append(crumbLeft, crumbRight);
 
-  // ── Hero
+  const crumbRule = document.createElement("hr");
+  crumbRule.className = "border-0 border-t border-ink-200 my-3";
+
+  inner.append(crumb, crumbRule, layout);
+  root.appendChild(inner);
+
+  // ── Hero (mockup): image w/ gradient overlay + title/address on it,
+  // flush divided action grid, then the description disclosure block.
   const hero = document.createElement("section");
-  hero.className = "rounded-xl bg-white shadow-sm ring-1 ring-ink-100 overflow-hidden";
+  hero.className = "rounded-2xl bg-white shadow-sm border border-ink-100 overflow-hidden";
+
+  const sold = isTrue(listing.propertySold);
   const heroImg = document.createElement("div");
-  heroImg.className = "relative aspect-[21/9] bg-ink-100";
+  heroImg.className = "relative aspect-[16/9] bg-ink-200 group overflow-hidden";
   const img = document.createElement("img");
   const filename = (listing.propertyImages || "").trim();
   img.src = filename ? IMAGE_BASE_URL + filename : PLACEHOLDER_IMAGE;
   img.alt = listing.propertyName || "";
-  img.className = `absolute inset-0 h-full w-full object-cover ${isTrue(listing.propertySold) ? "grayscale opacity-90" : ""}`;
+  img.className = "absolute inset-0 h-full w-full object-cover transition-transform duration-700 group-hover:scale-105" + (sold ? " grayscale opacity-90" : "");
   img.addEventListener("error", () => { img.src = PLACEHOLDER_IMAGE; }, { once: true });
-  heroImg.appendChild(img);
+  const overlay = document.createElement("div");
+  overlay.className = "absolute inset-0 z-0 bg-gradient-to-br from-brand-600/10 to-ink-900/60";
+  heroImg.append(img, overlay);
 
   const badges = document.createElement("div");
-  badges.className = "absolute top-3 right-3 flex flex-wrap gap-1 justify-end";
+  badges.className = "absolute top-4 right-4 z-10 flex flex-wrap justify-end gap-2";
   heroImg.appendChild(badges);
+
+  const heroCaption = document.createElement("div");
+  heroCaption.className = "absolute bottom-5 left-5 right-5 z-10 text-white";
+  const title = document.createElement("h1");
+  title.className = "text-2xl md:text-3xl font-bold leading-tight drop-shadow";
+  title.textContent = listing.propertyName || `Listing ${listing.propertyId}`;
+  const addr = document.createElement("p");
+  addr.className = "text-sm font-medium text-white/90 mt-1";
+  addr.textContent = [listing.propertyAddress].filter(Boolean).join(", ") || "—";
+  heroCaption.append(title, addr);
+  heroImg.appendChild(heroCaption);
 
   hero.appendChild(heroImg);
 
-  const heroBody = document.createElement("div");
-  heroBody.className = "p-5 md:p-6 space-y-2";
-  const title = document.createElement("h1");
-  title.className = "text-2xl md:text-3xl font-semibold text-ink-900 leading-tight";
-  title.textContent = listing.propertyName || `Listing ${listing.propertyId}`;
-  const addr = document.createElement("p");
-  addr.className = "text-sm text-ink-500";
-  addr.textContent = [listing.propertyAddress].filter(Boolean).join(", ") || "—";
+  // Flush action grid, attached directly under the image (no gap).
+  hero.appendChild(buildActionsRow(listing));
 
-  // DETAIL-13: 3 brand-colored quick-action buttons (Maps / VR tour / YouTube).
-  // Supersedes the old standalone "View on Google Maps" row (DETAIL-02) and
-  // the inline media strip (DETAIL-12).
-  const actionsRow = buildActionsRow(listing);
-
-  heroBody.append(title, addr, actionsRow);
-  // DETAIL-18: collapsible description (with optional EN/AR toggle) lives
-  // inside the hero card, directly below the actions row. Starts collapsed.
+  // DETAIL-18: collapsible description disclosure — its own bordered block.
   const descDisclosure = buildDescriptionDisclosure(listing);
-  if (descDisclosure) heroBody.appendChild(descDisclosure);
-  hero.appendChild(heroBody);
+  if (descDisclosure) hero.appendChild(descDisclosure);
   center.appendChild(hero);
 
-  // Countdown ticker drives only the floating status badges on the hero image
-  // now that the "Ends in" tile has been replaced by the actions row.
+  // Countdown ticker → floating status pills on the hero image (mockup style).
   const unsubscribe = subscribeCountdown(() => {
     const t = timeUntil(listing.endBidding);
     badges.innerHTML = "";
+    if (listing.auctionType) badges.appendChild(heroPill(listing.auctionType, "bg-ink-900/80"));
     for (const k of listingStatusKinds(listing, t.bucket)) {
-      const b = statusBadge(k);
-      if (b) badges.appendChild(b);
+      const p = HERO_PILL[k];
+      if (p) badges.appendChild(heroPill(p.t, p.c));
     }
   });
 
@@ -176,9 +364,8 @@ export function renderDetail(propertyId) {
   const isOffer = listing.auctionType === "Make An Offer";
   const sectionTitle = isOffer ? "Offers" : "Bidding";
 
-  // DETAIL-17: Payment terms + Price modifier moved here from the
-  // (now-removed) Commercial terms section.
-  const priceMod = decode("priceModifier", listing.priceModifier);
+  // DETAIL-30: Commercial Terms card removed at user request — Payment terms /
+  // Price modifier / increments are no longer surfaced on the detail page.
 
   // DATA-04: searchProperty.highestBidder is a buyer/fuser id (highest
   // bidder for Online-Auction, highest offerer for Make-An-Offer). Resolve
@@ -204,42 +391,41 @@ export function renderDetail(propertyId) {
     [isOffer ? "Total offers"        : "Total bids",        formatNumber(listing.no_of_bids)],
     [isOffer ? "Highest offerer"     : "Highest bidder",    highestPersonLabel],
     ["Sold amount",                                         isTrue(listing.propertySold) ? money(listing.soldAmount, listing.CURRENCY_SYMBOL || listing.CURRENCY_CODE) : null],
-    ["Payment terms",                                       decode("purchaseStatus", listing.purchaseStatus)],
-    ["Price modifier",                                      priceMod && priceMod !== "None" ? priceMod : null],
   ]);
   // Side rails use a single-column dl layout (narrower than the center)
   offersSection.querySelector("dl")?.classList.remove("sm:grid-cols-2");
   // DETAIL-15: Offers/Bidding flips to the negative (inverted) palette.
   applyNegativePalette(offersSection);
 
-  const timingSection = section("Timing", [
-    ["Bidding starts",    formatDateTime(listing.startBidding)],
-    ["Bidding ends",      formatDateTime(listing.endBidding)],
-    ["Expiry days",       listing.expiryDay],
-    ["Listed on",         formatDate(listing.insertDate)],
-    ["Days listed",       (() => { const d = daysSince(listing.insertDate); return d == null ? null : `${d} day${d === 1 ? "" : "s"}`; })()],
-  ]);
-  timingSection.querySelector("dl")?.classList.remove("sm:grid-cols-2");
+  const timingSection = darkCardShell("Auction Timing");
+  const timingBody = document.createElement("div");
+  timingBody.className = "relative z-10 space-y-5";
+  timingSection.appendChild(timingBody);
 
-  const specsSection = section("Specifications", [
-    ["Property ID",       listing.propertyId],
-    ["Property category", decode("propertyType", listing.propertyType)],
-    ["Property type",     listing.SUB_PROPERTY_TYPE],
-    ["Auction type",      listing.auctionType],
-    ["Area (m²)",         listing.homeSquareFootage ? `${formatNumber(listing.homeSquareFootage)} m²` : null],
-    ["Bedrooms",          listing.bedrooms],
-    ["Bathrooms",         listing.baths],
-    ["Lot size",          listing.lotSize],
-    ["Year built",        listing.yearBuilt],
-    ["Occupancy",         decode("propertyOccupancyStatus", listing.propertyOccupancyStatus)],
-    ["Tenure",            decode("tenure", listing.tenure)],
-    ["Land use",          decode("land_use", listing.land_use)],
-    ["Property label",    decode("propertyLabel", listing.propertyLabel)],
-    ["Utilities",         decode("utilities_connected", listing.utilities_connected)],
-    ["Featured",          decode("featured", listing.featured)],
-    ["Option",            listing.optionName],
-  ]);
-  specsSection.querySelector("dl")?.classList.remove("sm:grid-cols-2");
+  const timingRows = [
+    ["Bidding starts", formatDateTime(listing.startBidding)],
+    ["Bidding ends",   formatDateTime(listing.endBidding)],
+    ["Expiry days",    listing.expiryDay],
+    ["Listed on",      formatDate(listing.insertDate)],
+    ["Days listed",    (() => { const d = daysSince(listing.insertDate); return d == null ? null : `${d} day${d === 1 ? "" : "s"}`; })()],
+  ].filter(([, v]) => v != null && v !== "");
+  const timingDlEl = document.createElement("dl");
+  timingDlEl.className = "grid grid-cols-1 gap-y-2.5";
+  for (const [k, v] of timingRows) {
+    const r = document.createElement("div");
+    r.className = "flex justify-between gap-3";
+    const dt = document.createElement("dt");
+    dt.className = "text-xs text-ink-400 font-medium";
+    dt.textContent = k;
+    const dd = document.createElement("dd");
+    dd.className = "text-sm font-semibold text-white text-right";
+    dd.textContent = v;
+    r.append(dt, dd);
+    timingDlEl.appendChild(r);
+  }
+  timingBody.appendChild(timingDlEl);
+
+  const specsSection = buildSpecsCard(listing);
 
   // DETAIL-18: description moved out of the center column into a
   // collapsible disclosure inside the hero card (see buildDescriptionDisclosure
@@ -286,22 +472,28 @@ export function renderDetail(propertyId) {
   // Left rail: Seller/Agent → Specifications (DETAIL-10).
   leftRail.append(sellerSection, specsSection);
 
-  // Center: nav + hero already appended above. Now everything else.
-  // (DETAIL-11 removed Status & flags; Property ID + Featured moved to Specs.)
-  // (DETAIL-12 inlined Media into the hero card.)
-  // (DETAIL-18 moved Description into the hero card as a disclosure.)
+  // Center order (DETAIL-30, user-set): hero → HubSpot → Offers/Registrations
+  // → then everything else (Lawyers, Bank) shifted below.
+  const hubspotCard = buildHubSpotReportSection(listing);
+  center.appendChild(hubspotCard);
+
+  // WORKER-08 / DETAIL-24: per-property demand card (READ-ONLY admin scrape).
+  const isMakeOffer = listing.auctionType === "Make An Offer";
+  const demandCard = isMakeOffer ? buildOffersSection(listing) : buildBiddersSection(listing);
+  center.appendChild(demandCard);
+
   if (lawyersSection)     center.appendChild(lawyersSection);
   if (bankSection)        center.appendChild(bankSection);
 
-  // DETAIL-22: per-property HubSpot reports card (n8n-backed; see WORKER-06).
-  center.appendChild(buildHubSpotReportSection(listing));
-
-  // WORKER-08 / DETAIL-24: per-property demand card (READ-ONLY admin scrape
-  // via the Worker), lazy-hydrated like the HubSpot card. Mutually exclusive
-  // by auctionType: Make-An-Offer → Offers History; Online-Auction → Auction
-  // Registrations ("Bidders List"). A property is one or the other.
-  const isMakeOffer = listing.auctionType === "Make An Offer";
-  center.appendChild(isMakeOffer ? buildOffersSection(listing) : buildBiddersSection(listing));
+  // Cursor-tracked shadow on every detail-page card except the hero
+  // (photo + actions + description) — user request. Dark cards use the
+  // "strong" preset to overcome their built-in Tailwind shadow-lg.
+  attachCursorShadow(timingSection, { intensity: "strong" });
+  attachCursorShadow(offersSection, { intensity: "strong" });
+  for (const c of [specsSection, sellerSection, hubspotCard, demandCard,
+                   lawyersSection, bankSection]) {
+    if (c) attachCursorShadow(c);
+  }
 
   // DETAIL-09: live "Starts in / Ends in" tile at the top of the Timing
   // section, styled with a negative (inverted) palette — dark background,
@@ -309,23 +501,27 @@ export function renderDetail(propertyId) {
   // DETAIL-14: starts hidden — the synchronous first tick from
   // subscribeCountdown will reveal it only when there's a real value to show.
   const timingCountdown = document.createElement("div");
-  timingCountdown.className = "mb-4 rounded-lg bg-ink-900 ring-1 ring-ink-800 p-3 hidden";
+  timingCountdown.className = "hidden";
   timingCountdown.innerHTML = `
-    <div class="text-[10px] uppercase tracking-wider text-ink-300 font-semibold timing-cd-label">—</div>
-    <div class="mt-0.5 text-lg font-semibold text-white tabular-nums timing-cd-value">—</div>`;
-  const timingDl = timingSection.querySelector("dl");
-  if (timingDl) timingSection.insertBefore(timingCountdown, timingDl);
-  else          timingSection.appendChild(timingCountdown);
+    <div class="text-[10px] uppercase tracking-widest text-ink-300 font-bold timing-cd-label">—</div>
+    <div class="mt-1 text-3xl font-extrabold text-insight-400 tabular-nums tracking-tight timing-cd-value">—</div>`;
+  timingBody.insertBefore(timingCountdown, timingBody.firstChild);
 
   const tcLabel = timingCountdown.querySelector(".timing-cd-label");
   const tcValue = timingCountdown.querySelector(".timing-cd-value");
 
-  const startMs = (() => {
-    const raw = listing.startBidding;
-    if (!raw) return null;
-    const d = new Date(String(raw).replace(" ", "T"));
-    return Number.isNaN(d.getTime()) ? null : d.getTime();
-  })();
+  // Coming-soon → purple. Active: <1h red, <1d amber, else green. Dark card,
+  // so we use the lighter tone (-300/-400) for legibility on ink-900.
+  const VALUE_BASE = "mt-1 text-3xl font-extrabold tabular-nums tracking-tight timing-cd-value";
+  const timingTone = (t, coming) => {
+    if (coming) return "text-brand-300";
+    if (!Number.isFinite(t.ms)) return "text-ink-300";
+    if (t.ms < 3600000) return "text-urgent-500";
+    if (t.ms < 86400000) return "text-amber-400";
+    return "text-insight-400";
+  };
+
+  const startMs = parseListingDate(listing.startBidding)?.getTime() ?? null;
 
   const unsubscribeTiming = subscribeCountdown((now) => {
     if (startMs != null && startMs > now) {
@@ -334,7 +530,8 @@ export function renderDetail(propertyId) {
         timingCountdown.classList.add("hidden");
       } else {
         tcLabel.textContent = "Starts in";
-        tcValue.textContent = t.text;
+        tcValue.textContent = dhms(t);
+        tcValue.className = `${VALUE_BASE} ${timingTone(t, true)}`;
         timingCountdown.classList.remove("hidden");
       }
     } else {
@@ -343,7 +540,8 @@ export function renderDetail(propertyId) {
         timingCountdown.classList.add("hidden");
       } else {
         tcLabel.textContent = "Ends in";
-        tcValue.textContent = t.text;
+        tcValue.textContent = dhms(t);
+        tcValue.className = `${VALUE_BASE} ${timingTone(t, false)}`;
         timingCountdown.classList.remove("hidden");
       }
     }
@@ -357,7 +555,7 @@ export function renderDetail(propertyId) {
   // the active button or a disabled "already initiated" tile.
   if (getState().isOperator) {
     const initiateControl = buildInitiateAuctionControl(listing, startMs);
-    if (initiateControl) timingSection.appendChild(initiateControl);
+    if (initiateControl) timingBody.appendChild(initiateControl);
   }
 
   root.__cleanup = () => { unsubscribe(); unsubscribeTiming(); };
@@ -414,17 +612,17 @@ function buildDescriptionDisclosure(listing) {
   if (!hasEn && !hasAr) return null;
 
   const wrap = document.createElement("div");
-  wrap.className = "mt-4 border-t border-ink-100 pt-2";
+  wrap.className = "border-t border-ink-50";
 
-  // Header row: full-width press target with the segmented toggle floated
-  // absolutely on the right so it doesn't intercept the disclosure click.
+  // Whole header row is the press target (no surrounding padding → compact
+  // when collapsed); the segmented toggle floats absolutely on the right.
   const headerWrap = document.createElement("div");
   headerWrap.className = "relative";
 
   const trigger = document.createElement("button");
   trigger.type = "button";
   trigger.setAttribute("aria-expanded", "false");
-  trigger.className = "w-full inline-flex items-center justify-center gap-1.5 rounded-lg py-2.5 text-sm font-medium text-ink-700 hover:bg-ink-100 hover:text-ink-900 transition";
+  trigger.className = "w-full inline-flex items-center justify-center gap-1.5 px-6 py-3 text-sm font-semibold text-ink-700 hover:bg-ink-50 hover:text-ink-900 transition";
   trigger.innerHTML = `<span>Description</span><svg class="chevron transition-transform duration-200" width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.06l3.71-3.83a.75.75 0 011.08 1.04l-4.25 4.39a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>`;
   headerWrap.appendChild(trigger);
 
@@ -456,7 +654,7 @@ function buildDescriptionDisclosure(listing) {
   collapseInner.className = "overflow-hidden min-h-0";
 
   const body = document.createElement("div");
-  body.className = "prose prose-sm max-w-none text-ink-800 leading-relaxed pt-3";
+  body.className = "prose prose-sm max-w-none text-ink-800 leading-relaxed px-6 pt-1 pb-6";
 
   function renderBody() {
     body.classList.remove("whitespace-pre-wrap");
@@ -573,18 +771,9 @@ function paintInitiateControl(wrap, listing, startMs) {
       taskValue.className = "font-mono text-ink-300 truncate flex-1";
       taskValue.title = prior.master_task_id;
       taskValue.textContent = prior.master_task_id;
-      const copyBtn = document.createElement("button");
-      copyBtn.type = "button";
-      copyBtn.title = "Copy task ID";
-      copyBtn.className = "text-ink-300 hover:text-white transition shrink-0";
-      copyBtn.innerHTML = `<svg width="11" height="11" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M7 3a2 2 0 00-2 2v1H4a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-1h1a2 2 0 002-2V5a2 2 0 00-2-2H7zm0 2h8v8h-1V8a2 2 0 00-2-2H7V5zM4 8h8v8H4V8z"/></svg>`;
-      copyBtn.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(prior.master_task_id);
-          const originalHtml = copyBtn.innerHTML;
-          copyBtn.textContent = "✓";
-          setTimeout(() => { copyBtn.innerHTML = originalHtml; }, 1200);
-        } catch { /* silent */ }
+      const copyBtn = copyIconButton(() => prior.master_task_id, {
+        size: 11,
+        className: "text-ink-300 hover:text-white transition shrink-0",
       });
       meta.append(taskLabel, taskValue, copyBtn);
       wrap.appendChild(meta);
@@ -606,7 +795,7 @@ function paintInitiateControl(wrap, listing, startMs) {
     btn.className = "w-full inline-flex items-center justify-center gap-1.5 rounded-md bg-ink-800 text-ink-500 px-3 py-2 text-sm font-semibold ring-1 ring-ink-700 cursor-not-allowed";
     btn.title = disabledReason;
   } else {
-    btn.className = "w-full inline-flex items-center justify-center gap-1.5 rounded-md bg-ink-800 hover:bg-ink-700 text-white px-3 py-2 text-sm font-semibold ring-1 ring-ink-700 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500";
+    btn.className = "w-full inline-flex items-center justify-center gap-1.5 rounded-md bg-ink-800 hover:bg-ink-700 text-white px-3 py-2 text-sm font-semibold ring-1 ring-ink-700 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600";
     btn.addEventListener("click", () => openInitiateAuctionModal(listing, () => paintInitiateControl(wrap, listing, startMs)));
   }
 
@@ -615,11 +804,9 @@ function paintInitiateControl(wrap, listing, startMs) {
 
 function openInitiateAuctionModal(listing, onSuccess) {
   const propertyId = String(listing.propertyId || "");
-  const rawStart   = listing.startBidding;
-  const startDate  = rawStart ? new Date(String(rawStart).replace(" ", "T")) : null;
-  const validStart = startDate && !Number.isNaN(startDate.getTime());
-  const startIso   = validStart ? startDate.toISOString() : null;
-  const startLocal = validStart ? startDate.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }) : "—";
+  const startDate  = parseListingDate(listing.startBidding);
+  const startIso   = startDate ? startDate.toISOString() : null;
+  const startLocal = startDate ? startDate.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }) : "—";
 
   const backdrop = document.createElement("div");
   backdrop.className = "fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 fade-in";
@@ -655,7 +842,7 @@ function openInitiateAuctionModal(listing, onSuccess) {
   input.inputMode = "numeric";
   input.autocomplete = "off";
   input.spellcheck = false;
-  input.className = "mt-1 w-full rounded-md border border-ink-200 px-3 py-2 text-sm font-mono focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-100 transition";
+  input.className = "mt-1 w-full rounded-md border border-ink-200 px-3 py-2 text-sm font-mono focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-100 transition";
   label.htmlFor = "initiate-auction-input";
   input.id = "initiate-auction-input";
   labelWrap.append(label, input);
@@ -740,18 +927,9 @@ function openInitiateAuctionModal(listing, onSuccess) {
         val.className = "font-mono truncate flex-1";
         val.title = taskId;
         val.textContent = taskId;
-        const copyBtn = document.createElement("button");
-        copyBtn.type = "button";
-        copyBtn.title = "Copy task ID";
-        copyBtn.className = "shrink-0 text-emerald-700 hover:text-emerald-900 transition";
-        copyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M7 3a2 2 0 00-2 2v1H4a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-1h1a2 2 0 002-2V5a2 2 0 00-2-2H7zm0 2h8v8h-1V8a2 2 0 00-2-2H7V5zM4 8h8v8H4V8z"/></svg>`;
-        copyBtn.addEventListener("click", async () => {
-          try {
-            await navigator.clipboard.writeText(taskId);
-            const originalHtml = copyBtn.innerHTML;
-            copyBtn.textContent = "✓";
-            setTimeout(() => { copyBtn.innerHTML = originalHtml; }, 1200);
-          } catch { /* silent */ }
+        const copyBtn = copyIconButton(() => taskId, {
+          size: 12,
+          className: "shrink-0 text-emerald-700 hover:text-emerald-900 transition",
         });
         row.append(lbl, val, copyBtn);
         success.appendChild(row);
@@ -760,7 +938,7 @@ function openInitiateAuctionModal(listing, onSuccess) {
       modal.innerHTML = "";
       const closeBtn = document.createElement("button");
       closeBtn.type = "button";
-      closeBtn.className = "rounded-lg bg-accent-700 hover:bg-accent-800 text-white px-3 py-1.5 text-sm font-semibold shadow-sm transition";
+      closeBtn.className = "rounded-lg bg-brand-700 hover:bg-brand-800 text-white px-3 py-1.5 text-sm font-semibold shadow-sm transition";
       closeBtn.textContent = "Close";
       closeBtn.addEventListener("click", close);
       const successActions = document.createElement("div");
@@ -788,16 +966,43 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
-// DETAIL-15: flip a section() node to the negative (inverted) palette in-place.
+// Icon-only "copy to clipboard" button. On click: writes getText() to the
+// clipboard and flips the glyph to ✓ for 1.2 s. Used by the operator
+// "Auction initiated" tile and the modal success row. (The hero action tiles
+// use their own label-swap variant in actionButton — intentionally separate.)
+const COPY_ICON_PATH = `<path d="M7 3a2 2 0 00-2 2v1H4a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-1h1a2 2 0 002-2V5a2 2 0 00-2-2H7zm0 2h8v8h-1V8a2 2 0 00-2-2H7V5zM4 8h8v8H4V8z"/>`;
+function copyIconButton(getText, { size = 12, className = "" } = {}) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.title = "Copy task ID";
+  btn.className = className;
+  btn.innerHTML = `<svg width="${size}" height="${size}" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">${COPY_ICON_PATH}</svg>`;
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(getText());
+      const originalHtml = btn.innerHTML;
+      btn.textContent = "✓";
+      setTimeout(() => { btn.innerHTML = originalHtml; }, 1200);
+    } catch { /* silent */ }
+  });
+  return btn;
+}
+
+// DETAIL-15 / DETAIL-31: flip a cardShell() node to the negative (inverted)
+// palette in-place — works WITH the unified header+body chrome (no longer
+// clobbers the outer section, which would drop overflow/rounded and leave a
+// light header strip on a dark body).
 function applyNegativePalette(node) {
-  node.className = "rounded-xl bg-ink-900 shadow-sm ring-1 ring-ink-800 p-5 md:p-6";
+  node.className = "rounded-2xl bg-ink-900 shadow-lg border border-ink-800 overflow-hidden";
+  const header = node._header;
+  if (header) header.className = "px-5 py-4 border-b border-ink-800 bg-ink-900 flex items-center justify-between gap-3 flex-wrap";
   const h = node.querySelector("h2");
-  if (h) h.className = "text-sm font-semibold text-ink-300 uppercase tracking-wider mb-4";
+  if (h) h.className = "text-base font-bold text-white";
   for (const dt of node.querySelectorAll("dt")) {
     dt.className = "text-xs text-ink-400 font-medium uppercase tracking-wider";
   }
   for (const dd of node.querySelectorAll("dd")) {
-    dd.className = "text-sm text-white";
+    dd.className = "text-sm font-semibold text-white";
   }
 }
 
@@ -810,7 +1015,6 @@ function applyNegativePalette(node) {
 // every setState — a node-attached timer would be orphaned each re-render.
 
 const reportPollers = new Map();   // propertyId → setTimeout handle
-const reportHydrating = new Set(); // propertyId → lazy KV read in flight
 const REPORT_POLL_FIRST_MS = 1500; // snappy first check (n8n often ~6 s)
 const REPORT_POLL_MS = 3000;
 const REPORT_POLL_MAX = 60;        // ~3 min ceiling
@@ -881,39 +1085,205 @@ function reportTextNote(text, danger) {
   return d;
 }
 
+// Loading/auth/error note for a lazily-hydrated slice, or null when the slice
+// is ready and the caller should render its data. `noun` fills the three
+// shared copy strings (e.g. "offers", "registrations").
+function sliceLoadNote(slice, noun) {
+  const status = slice && slice.status;
+  if (!slice || status === "loading") return reportSpinnerNote(`Loading ${noun}…`);
+  if (status === "auth_error") return reportTextNote(`Sign in to view ${noun}.`, true);
+  if (status === "error") return reportTextNote(slice.error || `Couldn't load ${noun}.`, true);
+  return null;
+}
+
 // "NOT_STARTED" / "in-progress" → "Not Started" / "In Progress".
 function humanizeKey(k) {
   return String(k).toLowerCase().replace(/[_\-]+/g, " ").trim()
     .replace(/\b\w/g, c => c.toUpperCase());
 }
 
-// A labelled sub-block inside the HubSpot card: small uppercase sub-heading
-// over a 2-col label/value grid (same row shape as section()'s <dl>). Returns
-// null when every row is empty, so the caller can skip rendering it entirely.
-function reportSubsection(title, rows) {
-  const filtered = rows.filter(([, v]) => v != null && v !== "");
-  if (!filtered.length) return null;
-  const box = document.createElement("div");
+// % of max, clamped to [min,100]; min keeps tiny non-zero values visible.
+const clampPct = (n, max, min) =>
+  (!Number.isFinite(n) || !Number.isFinite(max) || max <= 0)
+    ? min : Math.max(min, Math.min(100, Math.round((n / max) * 100)));
+
+function reportSubHead(title) {
   const h = document.createElement("h3");
-  h.className = "text-xs font-semibold text-ink-400 uppercase tracking-wider mb-2";
+  h.className = "text-[11px] font-bold text-ink-400 uppercase tracking-widest mb-3";
   h.textContent = title;
-  const dl = document.createElement("dl");
-  dl.className = "grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2";
-  for (const [label, value] of filtered) {
-    const row = document.createElement("div");
-    row.className = "flex flex-col gap-0.5";
-    const dt = document.createElement("dt");
-    dt.className = "text-xs text-ink-500 font-medium uppercase tracking-wider";
-    dt.textContent = label;
-    const dd = document.createElement("dd");
-    dd.className = "text-sm text-ink-900";
-    if (value instanceof HTMLElement) dd.appendChild(value);
-    else dd.textContent = value;
-    row.append(dt, dd);
-    dl.appendChild(row);
+  return h;
+}
+
+// One of the 3 roll-up tiles (Contacts / Deals / Tasks), colour-toned.
+function metricTile(label, n, tone) {
+  const T = {
+    insight: ["bg-insight-50/60 border-insight-100", "text-insight-600", "text-insight-800"],
+    brand:   ["bg-brand-50 border-brand-100",        "text-brand-600",   "text-brand-700"],
+    amber:   ["bg-amber-50 border-amber-100",        "text-amber-600",   "text-amber-800"],
+  }[tone];
+  const d = document.createElement("div");
+  d.className = `p-4 rounded-xl border ${T[0]}`;
+  const k = document.createElement("div");
+  k.className = `text-[10px] font-bold uppercase tracking-widest ${T[1]}`;
+  k.textContent = label;
+  const v = document.createElement("div");
+  v.className = `text-3xl font-extrabold mt-1 tabular-nums ${T[2]}`;
+  v.textContent = fmtCount(n);
+  d.append(k, v);
+  return d;
+}
+
+// Lead-bucket → colour tone + display order (user-specified).
+const LEAD_TONE = {
+  "Qualified": "green",
+  "Not Contacted Yet": "amber", "In Trials": "amber", "In Progress": "amber", "Connected": "amber",
+  "Unreachable": "red", "Not Qualified": "red",
+  "Qualified CRM": "black", "Seller": "black", "Broker": "black",
+};
+const LEAD_TONE_CLS = {
+  green: { track: "bg-insight-50", fill: "bg-insight-500", count: "text-insight-600" },
+  amber: { track: "bg-amber-50",   fill: "bg-amber-500",   count: "text-amber-600" },
+  red:   { track: "bg-urgent-50",  fill: "bg-urgent-500",  count: "text-urgent-600" },
+  black: { track: "bg-ink-100",    fill: "bg-ink-700",     count: "text-ink-700" },
+};
+// Fixed display order (user-specified) — not by count.
+const LEAD_ORDER = [
+  "Qualified",
+  "Not Contacted Yet", "In Trials", "In Progress", "Connected",
+  "Unreachable", "Not Qualified",
+  "Qualified CRM", "Seller", "Broker",
+];
+const leadOrder = (label) => {
+  const i = LEAD_ORDER.indexOf(label);
+  return i === -1 ? LEAD_ORDER.length : i;
+};
+const leadTone = (label) => LEAD_TONE[label] || "black";
+
+// One leads-by-status row: label + count + proportional CSS bar (tone-coloured).
+function leadBar(label, n, max) {
+  const c = LEAD_TONE_CLS[leadTone(label)];
+  const row = document.createElement("div");
+  row.className = "space-y-1";
+  const head = document.createElement("div");
+  head.className = "flex justify-between text-[11px] font-semibold";
+  const a = document.createElement("span");
+  a.className = "text-ink-700";
+  a.textContent = label;
+  const b = document.createElement("span");
+  b.className = `${c.count} tabular-nums`;
+  b.textContent = fmtCount(n);
+  head.append(a, b);
+  const track = document.createElement("div");
+  track.className = `h-2 w-full ${c.track} rounded-full overflow-hidden shadow-inner`;
+  const fill = document.createElement("div");
+  fill.className = `h-full ${c.fill} rounded-full`;
+  fill.style.width = clampPct(n, max, 2) + "%";
+  track.appendChild(fill);
+  row.append(head, track);
+  return row;
+}
+
+// Redesigned ready+data body: metric tiles + leads bars + deals funnel +
+// task badges. Pure presentation off `data` — NO hooks/state here.
+function buildReportBody(data) {
+  const t = data.totals || {};
+  const byBucket = (data.leadStatus && data.leadStatus.byBucket) || {};
+  const leads = [];
+  for (const [key, label] of Object.entries(HS_LEAD_STATUS_BUCKET_LABELS)) {
+    const n = byBucket[key];
+    if (!Number.isFinite(n) || n === 0) continue;
+    leads.push([label, n]);
   }
-  box.append(h, dl);
-  return box;
+  leads.sort((x, y) => leadOrder(x[0]) - leadOrder(y[0]));   // fixed order, not by count
+  const isIncompleteStage = (label) => /incomplete|lost|cancel|abandon|stalled/i.test(label);
+  const dealsRaw = (data.dealsByStage || [])
+    .map(s => [s.label || s.stageId || "Stage", Number(s.count) || 0]);
+  // Pipeline order preserved, except incomplete stage(s) are forced last.
+  const deals = [
+    ...dealsRaw.filter(([l]) => !isIncompleteStage(l)),
+    ...dealsRaw.filter(([l]) =>  isIncompleteStage(l)),
+  ];
+  const tasks = Object.entries((data.tasks && data.tasks.byStatus) || {})
+    .filter(([, v]) => Number.isFinite(v) && v > 0);
+
+  const body = document.createElement("div");
+  body.className = "p-6 space-y-8";
+
+  const tiles = document.createElement("div");
+  tiles.className = "grid grid-cols-3 gap-4";
+  tiles.append(
+    metricTile("Total Contacts", t.contacts, "insight"),
+    metricTile("Open Deals", t.deals, "brand"),
+    metricTile("Open Tasks", t.openTasks, "amber"),
+  );
+  body.appendChild(tiles);
+
+  if (leads.length) {
+    const sec = document.createElement("div");
+    sec.appendChild(reportSubHead("Leads by status"));
+    const list = document.createElement("div");
+    list.className = "space-y-4";
+    const max = Math.max(...leads.map(([, n]) => n));
+    for (const [label, n] of leads) list.appendChild(leadBar(label, n, max));
+    sec.appendChild(list);
+    body.appendChild(sec);
+  }
+
+  if (deals.length) {
+    const sec = document.createElement("div");
+    sec.appendChild(reportSubHead("Deals by stage"));
+    // Vertical bar chart; stage order preserved as the pipeline returns it
+    // (no sorting). Bar height ∝ count. "Incomplete" stages render red.
+    const chart = document.createElement("div");
+    chart.className = "flex items-end gap-2 overflow-x-auto pb-1";
+    const max = Math.max(...deals.map(([, n]) => n), 1);
+    deals.forEach(([label, n]) => {
+      const incomplete = isIncompleteStage(label);
+      const col = document.createElement("div");
+      col.className = "flex flex-col items-center gap-1.5 flex-1 min-w-[3rem]";
+      const cnt = document.createElement("div");
+      cnt.className = `text-[11px] font-extrabold tabular-nums ${incomplete ? "text-urgent-600" : "text-insight-700"}`;
+      cnt.textContent = fmtCount(n);
+      const plot = document.createElement("div");
+      plot.className = "w-full h-36 flex items-end justify-center";
+      const bar = document.createElement("div");
+      bar.className = `w-[1.875rem] rounded-t-md shadow-sm ${incomplete
+        ? "bg-gradient-to-t from-urgent-600 to-urgent-500 ring-1 ring-urgent-600"
+        : "bg-gradient-to-t from-insight-600 to-insight-500 ring-1 ring-insight-600"}`;
+      bar.style.height = clampPct(n, max, 2) + "%";
+      plot.appendChild(bar);
+      const lab = document.createElement("div");
+      lab.className = "text-[10px] font-semibold text-ink-500 text-center leading-tight w-full truncate";
+      lab.textContent = label;
+      lab.title = label;
+      col.append(cnt, plot, lab);
+      chart.appendChild(col);
+    });
+    sec.appendChild(chart);
+    body.appendChild(sec);
+  }
+
+  if (tasks.length) {
+    const sec = document.createElement("div");
+    sec.appendChild(reportSubHead("Tasks"));
+    const badges = document.createElement("div");
+    badges.className = "flex flex-wrap gap-2";
+    for (const [k, v] of tasks) {
+      const key = String(k).toLowerCase();
+      const tone = /high|urgent|overdue/.test(key)
+        ? "bg-urgent-50 text-urgent-600 border-urgent-100"
+        : /medium|progress|await|pending/.test(key)
+        ? "bg-amber-50 text-amber-700 border-amber-100"
+        : "bg-ink-100 text-ink-600 border-ink-200";
+      const b = document.createElement("span");
+      b.className = `px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-md border ${tone}`;
+      b.textContent = `${fmtCount(v)} ${humanizeKey(k)}`;
+      badges.appendChild(b);
+    }
+    sec.appendChild(badges);
+    body.appendChild(sec);
+  }
+  return body;
 }
 
 function stopReportPolling(id) {
@@ -961,16 +1331,8 @@ function startReportPolling(id) {
   reportPollers.set(id, setTimeout(tick, REPORT_POLL_FIRST_MS));
 }
 
-// Lazy one-shot KV read on first open. Async-only (never setState during
-// render): the .then() fires after render() completes.
-function hydrateReport(id) {
-  if (reportHydrating.has(id)) return;
-  reportHydrating.add(id);
-  fetchPropertyReport(id).then((rec) => {
-    reportHydrating.delete(id);
-    setPropertyReport(id, rec || { status: "empty" });
-  });
-}
+// Lazy one-shot KV read on first open (see makeHydrator).
+const hydrateReport = makeHydrator(fetchPropertyReport, setPropertyReport);
 
 async function onReportRefresh(id) {
   setPropertyReport(id, { status: "running", polling: true, startedAt: Date.now() });
@@ -997,7 +1359,6 @@ function buildHubSpotReportSection(listing) {
 
   const status = slice && slice.status;
   const data = slice && slice.data;
-  const rows = [];
   let groups = null;
   let note = null;
   let footer = reportProvenance(slice);
@@ -1026,46 +1387,7 @@ function buildHubSpotReportSection(listing) {
       note = reportSpinnerNote(`Computing…${when}`);
     }
   } else if (status === "ready" && data) {
-    const t = data.totals || {};
-
-    const byBucket = (data.leadStatus && data.leadStatus.byBucket) || {};
-    const leadRows = [];
-    for (const [key, label] of Object.entries(HS_LEAD_STATUS_BUCKET_LABELS)) {
-      const n = byBucket[key];
-      // Surface unmapped only when non-zero; skip other empty buckets.
-      if (!Number.isFinite(n) || n === 0) continue;
-      leadRows.push([label, fmtCount(n)]);
-    }
-
-    const dealRows = (data.dealsByStage || [])
-      .map(s => [s.label || s.stageId || "Stage", fmtCount(s.count)]);
-
-    const taskBy = (data.tasks && data.tasks.byStatus) || {};
-    const taskRows = Object.entries(taskBy)
-      .filter(([, v]) => Number.isFinite(v) && v > 0)
-      .map(([k, v]) => [humanizeKey(k), fmtCount(v)]);
-
-    // Group the three data domains into scannable sub-sections instead of one
-    // flat <dl>. Totals stays a roll-up; each reportSubsection() self-skips
-    // when it has no rows (DETAIL-25).
-    groups = document.createElement("div");
-    groups.className = "space-y-5";
-    for (const sub of [
-      reportSubsection("Totals", [
-        ["Contacts", fmtCount(t.contacts)],
-        ["Deals", fmtCount(t.deals)],
-        ["Open tasks", fmtCount(t.openTasks)],
-      ]),
-      reportSubsection("Leads by status", leadRows),
-      reportSubsection("Deals by stage", dealRows),
-      reportSubsection("Tasks", taskRows),
-    ]) if (sub) groups.appendChild(sub);
-
-    if (!groups.childElementCount) {
-      note = reportTextNote("Report computed, but there's no data to display yet.");
-      groups = null;
-    }
-
+    groups = buildReportBody(data);   // metric tiles + bars + funnel + tasks
     if (Number.isFinite(slice.cooldownRemainingMs) && slice.cooldownRemainingMs > 0) {
       refreshDisabled = true;
       cooldownEndsAt = Date.now() + slice.cooldownRemainingMs;
@@ -1080,16 +1402,19 @@ function buildHubSpotReportSection(listing) {
     refreshLabel = "Generate reports";
   }
 
-  const wrap = section("HubSpot reports", rows);
+  const wrap = document.createElement("section");
+  wrap.className = "rounded-2xl bg-white shadow-sm border border-ink-100 overflow-hidden";
 
-  if (groups) wrap.appendChild(groups);
-  if (note) wrap.appendChild(note);
-
-  const foot = document.createElement("div");
-  foot.className = "mt-4 flex items-center justify-between gap-3 flex-wrap";
+  const header = document.createElement("div");
+  header.className = "p-5 border-b border-ink-50 bg-ink-50/50 flex items-center justify-between gap-3 flex-wrap";
+  const h2 = document.createElement("h2");
+  h2.className = "text-base font-bold text-ink-900";
+  h2.textContent = "HubSpot Performance";
+  const headRight = document.createElement("div");
+  headRight.className = "flex items-center gap-3 flex-wrap";
 
   const stamp = document.createElement("span");
-  stamp.className = "text-xs text-ink-400";
+  stamp.className = "text-[10px] font-bold uppercase tracking-widest text-ink-400";
   stamp.textContent = footer || "";
 
   const btn = document.createElement("button");
@@ -1122,8 +1447,17 @@ function buildHubSpotReportSection(listing) {
     wrap.__cleanup = () => { if (unsub) { unsub(); unsub = null; } };
   }
 
-  foot.append(stamp, btn);
-  wrap.appendChild(foot);
+  headRight.append(stamp, btn);
+  header.append(h2, headRight);
+  wrap.appendChild(header);
+  if (groups) {
+    wrap.appendChild(groups);                 // buildReportBody already padded
+  } else if (note) {
+    const nb = document.createElement("div");
+    nb.className = "p-6";
+    nb.appendChild(note);
+    wrap.appendChild(nb);
+  }
   return wrap;
 }
 
@@ -1133,16 +1467,7 @@ function buildHubSpotReportSection(listing) {
 // hydrate on open (no polling, no refresh — offers change slowly and a page
 // reload re-fetches). State lives in state.propertyOffers[id].
 
-const offersHydrating = new Set(); // propertyId → lazy read in flight
-
-function hydrateOffers(id) {
-  if (offersHydrating.has(id)) return;
-  offersHydrating.add(id);
-  fetchPropertyOffers(id).then((rec) => {
-    offersHydrating.delete(id);
-    setPropertyOffers(id, rec || { status: "empty" });
-  });
-}
+const hydrateOffers = makeHydrator(fetchPropertyOffers, setPropertyOffers);
 
 // STYLE-05: status pill colouring. Shared by the Offers History card
 // (Maker/Checker/Belmazad) and the Auction Registrations card
@@ -1152,19 +1477,20 @@ function hydrateOffers(id) {
 function offerStatusPill(text) {
   const t = String(text || "").trim();
   const s = document.createElement("span");
-  let cls = "bg-ink-100 text-ink-600"; // neutral / unknown
-  // Substring stems (NOT \b-anchored: statuses are inflected — "Unapproved",
-  // "Approved"). Negative first so "un-approv"/"unpaid" never reach green.
-  if (/un-?approv|not\s*approv|unpaid|not\s*paid|reject|declin|cancel|fail|inactive|void|^no$/i.test(t)) {
-    cls = "bg-urgent/10 text-urgent";                 // red — negative
-  } else if (/pending|await|in\s*review|processing|on\s*hold/i.test(t)) {
-    cls = "bg-amber-100 text-amber-700";              // amber — in progress
-  } else if (/approv|accept|confirm|complete|success|paid|active|verified|done|^yes$/i.test(t)) {
-    cls = "bg-emerald-100 text-emerald-700";          // green — positive
-  }
-  s.className = `inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${cls}`;
+  s.className = `inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${STATUS_PILL_CLS[statusKind(t)]}`;
   s.textContent = t || "—";
   return s;
+}
+
+// "Label:" caption + a coloured status pill, used in the Offers History and
+// Auction Registrations cards.
+function statusChip(label, value) {
+  const g = document.createElement("span");
+  g.className = "inline-flex items-center gap-1 text-[10px] text-ink-400";
+  const l = document.createElement("span");
+  l.textContent = `${label}:`;
+  g.append(l, offerStatusPill(value));
+  return g;
 }
 
 function offerNumericValue(o) {
@@ -1186,31 +1512,14 @@ function buildOffersSection(listing) {
   const slice = getState().propertyOffers[id];
   if (!slice) hydrateOffers(id);
 
-  const wrap = document.createElement("section");
-  wrap.className = "rounded-xl bg-white shadow-sm ring-1 ring-ink-100 p-5 md:p-6";
-  const h = document.createElement("h2");
-  h.className = "text-sm font-semibold text-ink-500 uppercase tracking-wider mb-4";
-  h.textContent = "Offers History";
-  wrap.appendChild(h);
+  const wrap = cardShell("Offers History");
 
-  const status = slice && slice.status;
-
-  if (!slice || status === "loading") {
-    wrap.appendChild(reportSpinnerNote("Loading offers…"));
-    return wrap;
-  }
-  if (status === "auth_error") {
-    wrap.appendChild(reportTextNote("Sign in to view offers.", true));
-    return wrap;
-  }
-  if (status === "error") {
-    wrap.appendChild(reportTextNote(slice.error || "Couldn't load offers.", true));
-    return wrap;
-  }
+  const loadNote = sliceLoadNote(slice, "offers");
+  if (loadNote) { cardBody(wrap).appendChild(loadNote); return wrap; }
 
   const offers = Array.isArray(slice.offers) ? slice.offers : [];
   if (!offers.length) {
-    wrap.appendChild(reportTextNote("No offers on this property yet."));
+    cardBody(wrap).appendChild(reportTextNote("No offers on this property yet."));
     return wrap;
   }
 
@@ -1223,13 +1532,16 @@ function buildOffersSection(listing) {
   }
 
   const list = document.createElement("div");
-  list.className = "flex flex-col gap-3";
+  list.className = "space-y-3 max-h-[28rem] overflow-y-auto pr-1 custom-scrollbar";
   for (const o of offers) {
     const isTop = o.offerId === highestId;
+    const kind = statusKind(o.checkerStatus || o.makerStatus || o.belmazadStatus);
     const card = document.createElement("div");
-    card.className = isTop
-      ? "rounded-lg ring-1 ring-emerald-300 bg-emerald-50/60 p-3"
-      : "rounded-lg ring-1 ring-ink-100 bg-ink-50/40 p-3";
+    card.className = "relative overflow-hidden p-3 pl-4 rounded-xl border shadow-sm "
+      + (isTop ? "border-insight-300 bg-insight-50/50" : "border-ink-100 bg-white");
+    const accent = document.createElement("span");
+    accent.className = `absolute left-0 top-0 bottom-0 w-1 ${STATUS_BORDER_CLS[kind]}`;
+    card.appendChild(accent);
 
     const top = document.createElement("div");
     top.className = "flex items-start justify-between gap-3 flex-wrap";
@@ -1261,18 +1573,10 @@ function buildOffersSection(listing) {
 
     const statuses = document.createElement("div");
     statuses.className = "mt-2 flex items-center gap-2 flex-wrap";
-    const mk = (label, value) => {
-      const g = document.createElement("span");
-      g.className = "inline-flex items-center gap-1 text-[10px] text-ink-400";
-      const l = document.createElement("span");
-      l.textContent = `${label}:`;
-      g.append(l, offerStatusPill(value));
-      return g;
-    };
     statuses.append(
-      mk("Maker", o.makerStatus),
-      mk("Checker", o.checkerStatus),
-      mk("Belmazad", o.belmazadStatus),
+      statusChip("Maker", o.makerStatus),
+      statusChip("Checker", o.checkerStatus),
+      statusChip("Belmazad", o.belmazadStatus),
     );
     card.appendChild(statuses);
 
@@ -1284,14 +1588,14 @@ function buildOffersSection(listing) {
     }
     list.appendChild(card);
   }
-  wrap.appendChild(list);
+  cardBody(wrap).appendChild(list);
 
   const foot = document.createElement("div");
   foot.className = "mt-4 text-xs text-ink-400";
   const topOffer = offers.find(o => o.offerId === highestId);
   foot.textContent = `${offers.length} offer${offers.length === 1 ? "" : "s"}`
     + (topOffer && topOffer.price ? ` · highest ${offerPriceLabel(topOffer)} by ${topOffer.userName || "—"}` : "");
-  wrap.appendChild(foot);
+  cardBody(wrap).appendChild(foot);
 
   return wrap;
 }
@@ -1301,28 +1605,10 @@ function buildOffersSection(listing) {
 // from the admin index + per-id agent edit pages. One-shot lazy hydrate;
 // fail-soft to today's single block (no regression) on loading/error.
 
-const entitiesHydrating = new Set();
-
-function hydrateEntities(id) {
-  if (entitiesHydrating.has(id)) return;
-  entitiesHydrating.add(id);
-  fetchPropertyEntities(id).then((rec) => {
-    entitiesHydrating.delete(id);
-    setPropertyEntities(id, rec || { status: "empty" });
-  });
-}
+const hydrateEntities = makeHydrator(fetchPropertyEntities, setPropertyEntities);
 
 // DATA-04: one-shot lazy resolve of a buyer/fuser id → name (+ contact).
-const buyerHydrating = new Set();
-
-function hydrateBuyer(id) {
-  if (buyerHydrating.has(id)) return;
-  buyerHydrating.add(id);
-  fetchBuyer(id).then((rec) => {
-    buyerHydrating.delete(id);
-    setBuyer(id, rec || { status: "empty" });
-  });
-}
+const hydrateBuyer = makeHydrator(fetchBuyer, setBuyer);
 
 function personDisplayName(p, fallbackName) {
   if (!p) return fallbackName || "";
@@ -1333,40 +1619,66 @@ function personDisplayName(p, fallbackName) {
     || fallbackName || "";
 }
 
-function entityRows(p) {
-  return [
-    ["Name",  personDisplayName(p)],
-    ["Email", p && p.email && p.email !== "super admin" ? p.email : null],
-    ["Phone", p && p.phone ? p.phone : null],
-    ["City",  p && p.city ? p.city : null],
-  ];
-}
-
 // Single-column label/value list (left-rail width); mirrors section()'s <dl>.
+// Used by the fail-soft fallback only.
 function sellerDl(rows) {
-  const dl = document.createElement("dl");
-  dl.className = "grid grid-cols-1 gap-x-6 gap-y-3";
-  for (const [label, value] of rows) {
-    if (value == null || value === "") continue;
-    const row = document.createElement("div");
-    row.className = "flex flex-col gap-0.5";
-    const dt = document.createElement("dt");
-    dt.className = "text-xs text-ink-500 font-medium uppercase tracking-wider";
-    dt.textContent = label;
-    const dd = document.createElement("dd");
-    dd.className = "text-sm text-ink-900";
-    dd.textContent = value;
-    row.append(dt, dd);
-    dl.appendChild(row);
-  }
-  return dl;
+  return kvList(rows, { columns: 1 });
 }
 
-function sellerSubLabel(text) {
-  const d = document.createElement("div");
-  d.className = "text-xs font-semibold text-ink-600 uppercase tracking-wider mt-4 mb-2 first:mt-0";
-  d.textContent = text;
-  return d;
+function initials2(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "—";
+  return (parts.length > 1 ? parts[0][0] + parts[1][0] : parts[0].slice(0, 2)).toUpperCase();
+}
+
+// Role-coloured initials avatar (mockup): Seller=insight, Broker=brand.
+function avatarFor(name, role) {
+  const c = role === "broker"
+    ? "bg-brand-50 text-brand-600 ring-brand-100"
+    : "bg-insight-50 text-insight-600 ring-insight-100";
+  const s = document.createElement("span");
+  s.className = `h-10 w-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0 shadow-sm ring-1 ${c}`;
+  s.textContent = initials2(name);
+  s.setAttribute("aria-hidden", "true");
+  return s;
+}
+
+// Mockup person row: avatar + role label + bold name + contact lines.
+function personBlock(roleLabel, role, person, fallbackName, extraRows) {
+  const name = personDisplayName(person, fallbackName);
+  const row = document.createElement("div");
+  row.className = "flex items-start gap-3";
+  row.appendChild(avatarFor(name, role));
+  const col = document.createElement("div");
+  col.className = "min-w-0";
+  const rl = document.createElement("div");
+  rl.className = "text-[9px] uppercase font-bold tracking-wider mb-0.5 "
+    + (role === "broker" ? "text-brand-600" : "text-insight-600");
+  rl.textContent = roleLabel;
+  const nm = document.createElement("div");
+  nm.className = "font-bold text-ink-900 text-sm break-words";
+  nm.textContent = name || "Not assigned";
+  col.append(rl, nm);
+  const lines = [];
+  const email = person && person.email && person.email !== "super admin" ? person.email : null;
+  if (email) lines.push(email);
+  if (person && person.phone) lines.push(person.phone);
+  if (person && person.city) lines.push(person.city);
+  for (const ln of lines) {
+    const p = document.createElement("div");
+    p.className = "text-[11px] text-ink-500 mt-0.5 break-words";
+    p.textContent = ln;
+    col.appendChild(p);
+  }
+  if (extraRows) for (const [k, v] of extraRows) {
+    if (v == null || v === "") continue;
+    const p = document.createElement("div");
+    p.className = "text-[11px] text-ink-500 mt-0.5";
+    p.textContent = `${k}: ${v}`;
+    col.appendChild(p);
+  }
+  row.appendChild(col);
+  return row;
 }
 
 function buildSellerSection(listing) {
@@ -1374,12 +1686,7 @@ function buildSellerSection(listing) {
   const slice = getState().propertyEntities[id];
   if (!slice) hydrateEntities(id);
 
-  const wrap = document.createElement("section");
-  wrap.className = "rounded-xl bg-white shadow-sm ring-1 ring-ink-100 p-5 md:p-6";
-  const h = document.createElement("h2");
-  h.className = "text-sm font-semibold text-ink-500 uppercase tracking-wider mb-4";
-  h.textContent = "Seller / Agent";
-  wrap.appendChild(h);
+  const wrap = cardShell("Seller & Broker");
 
   // searchProperty exposes only the Maker identity — the fail-soft fallback.
   const legacyName = [listing.firstName, listing.middleName, listing.lastName].filter(Boolean).join(" ").trim();
@@ -1393,51 +1700,46 @@ function buildSellerSection(listing) {
   const status = slice && slice.status;
 
   if (status === "ok") {
-    if (slice.liveStatus) {
-      const b = document.createElement("span");
-      const live = /^active$/i.test(slice.liveStatus);
-      b.className = "inline-block mb-3 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide "
-        + (live ? "bg-emerald-100 text-emerald-700" : "bg-ink-200 text-ink-600");
-      b.textContent = slice.liveStatus;
-      wrap.appendChild(b);
-    }
+    const stack = document.createElement("div");
+    stack.className = "space-y-4";
 
-    // Seller = the real seller (Checker). "NA" upstream → not assigned.
-    wrap.appendChild(sellerSubLabel("Seller"));
-    if (slice.checker) {
-      wrap.appendChild(sellerDl([
-        ...entityRows(slice.checker),
-        ["Seller type", decode("sellerType", listing.sellerType)],
-      ]));
-    } else {
-      const na = document.createElement("p");
-      na.className = "text-sm text-ink-500";
-      na.textContent = "Not assigned";
-      wrap.appendChild(na);
-    }
+    // Seller = the real seller (Checker) — on top.
+    stack.appendChild(personBlock(
+      "Assigned Seller (Checker)", "seller", slice.checker, null,
+      [["Seller type", decode("sellerType", listing.sellerType)]],
+    ));
 
-    // Broker = the listing entity that created it (Maker). Falls back to the
-    // searchProperty maker fields if the agent edit page didn't resolve.
-    wrap.appendChild(sellerSubLabel("Broker"));
-    const brokerRows = slice.maker
-      ? entityRows(slice.maker)
-      : [
-          ["Name",  legacyName],
-          ["Email", listing.email && listing.email !== "super admin" ? listing.email : null],
-          ["Phone", listing.officeNumber],
-        ];
-    wrap.appendChild(sellerDl(brokerRows));
+    const hr = document.createElement("hr");
+    hr.className = "border-ink-100";
+    stack.appendChild(hr);
+
+    // Broker = the listing entity (Maker). Falls back to searchProperty maker.
+    const makerFallback = slice.maker ? null : {
+      firstName: listing.firstName, lastName: listing.lastName,
+      email: listing.email && listing.email !== "super admin" ? listing.email : null,
+      phone: listing.officeNumber,
+    };
+    stack.appendChild(personBlock(
+      "Listing Broker (Maker)", "broker", slice.maker || makerFallback, legacyName,
+    ));
+
+    cardBody(wrap).appendChild(stack);
     return wrap;
   }
 
-  // Fallback: today's exact block (no slice / loading / error / auth / not_found).
-  wrap.appendChild(sellerDl(legacyRows));
+  // Still resolving /entities → quiet skeleton, NOT the legacy searchProperty
+  // block (avoids the load-then-override flash the user flagged).
   if (!slice || status === "loading") {
-    const note = document.createElement("p");
-    note.className = "mt-3 text-[11px] text-ink-400";
-    note.textContent = "Resolving real seller…";
-    wrap.appendChild(note);
+    const ph = document.createElement("div");
+    ph.className = "flex items-start gap-3";
+    ph.innerHTML = `<div class="h-10 w-10 rounded-full bg-ink-100 shimmer shrink-0"></div><div class="flex-1 space-y-2 pt-1"><div class="h-2.5 w-20 bg-ink-100 rounded shimmer"></div><div class="h-3 w-32 bg-ink-100 rounded shimmer"></div><div class="h-2.5 w-40 bg-ink-100 rounded shimmer"></div></div>`;
+    cardBody(wrap).appendChild(ph);
+    return wrap;
   }
+
+  // /entities failed (error / auth / empty / not_found) → true fail-soft to
+  // the legacy searchProperty block so the card never goes blank.
+  cardBody(wrap).appendChild(sellerDl(legacyRows));
   return wrap;
 }
 
@@ -1445,54 +1747,34 @@ function buildSellerSection(listing) {
 // The auction-side mirror of the Offers History card. READ-ONLY admin scrape
 // of the "Bidders List" via WORKER-11; one-shot lazy hydrate.
 
-const biddersHydrating = new Set();
-
-function hydrateBidders(id) {
-  if (biddersHydrating.has(id)) return;
-  biddersHydrating.add(id);
-  fetchPropertyBidders(id).then((rec) => {
-    biddersHydrating.delete(id);
-    setPropertyBidders(id, rec || { status: "empty" });
-  });
-}
+const hydrateBidders = makeHydrator(fetchPropertyBidders, setPropertyBidders);
 
 function buildBiddersSection(listing) {
   const id = String(listing.propertyId || "");
   const slice = getState().propertyBidders[id];
   if (!slice) hydrateBidders(id);
 
-  const wrap = document.createElement("section");
-  wrap.className = "rounded-xl bg-white shadow-sm ring-1 ring-ink-100 p-5 md:p-6";
-  const h = document.createElement("h2");
-  h.className = "text-sm font-semibold text-ink-500 uppercase tracking-wider mb-4";
-  h.textContent = "Auction Registrations";
-  wrap.appendChild(h);
+  const wrap = cardShell("Auction Registrations");
 
-  const status = slice && slice.status;
-  if (!slice || status === "loading") {
-    wrap.appendChild(reportSpinnerNote("Loading registrations…"));
-    return wrap;
-  }
-  if (status === "auth_error") {
-    wrap.appendChild(reportTextNote("Sign in to view registrations.", true));
-    return wrap;
-  }
-  if (status === "error") {
-    wrap.appendChild(reportTextNote(slice.error || "Couldn't load registrations.", true));
-    return wrap;
-  }
+  const loadNote = sliceLoadNote(slice, "registrations");
+  if (loadNote) { cardBody(wrap).appendChild(loadNote); return wrap; }
 
   const bidders = Array.isArray(slice.bidders) ? slice.bidders : [];
   if (!bidders.length) {
-    wrap.appendChild(reportTextNote("No registrations on this auction yet."));
+    cardBody(wrap).appendChild(reportTextNote("No registrations on this auction yet."));
     return wrap;
   }
 
   const list = document.createElement("div");
-  list.className = "flex flex-col gap-3";
+  list.className = "space-y-3 max-h-[28rem] overflow-y-auto pr-1 custom-scrollbar";
   for (const b of bidders) {
+    const kind = statusKind(b.status || b.paymentStatus);
     const card = document.createElement("div");
-    card.className = "rounded-lg ring-1 ring-ink-100 bg-ink-50/40 p-3";
+    card.className = "relative overflow-hidden p-3 pl-4 bg-white rounded-xl border border-ink-100 shadow-sm"
+      + (kind === "negative" ? " opacity-70" : "");
+    const accent = document.createElement("span");
+    accent.className = `absolute left-0 top-0 bottom-0 w-1 ${STATUS_BORDER_CLS[kind]}`;
+    card.appendChild(accent);
 
     const top = document.createElement("div");
     top.className = "flex items-start justify-between gap-3 flex-wrap";
@@ -1517,16 +1799,8 @@ function buildBiddersSection(listing) {
 
     const statuses = document.createElement("div");
     statuses.className = "mt-2 flex items-center gap-2 flex-wrap";
-    const mk = (label, value) => {
-      const g = document.createElement("span");
-      g.className = "inline-flex items-center gap-1 text-[10px] text-ink-400";
-      const l = document.createElement("span");
-      l.textContent = `${label}:`;
-      g.append(l, offerStatusPill(value));
-      return g;
-    };
-    if (b.paymentStatus) statuses.appendChild(mk("Payment", b.paymentStatus));
-    if (b.status) statuses.appendChild(mk("Status", b.status));
+    if (b.paymentStatus) statuses.appendChild(statusChip("Payment", b.paymentStatus));
+    if (b.status) statuses.appendChild(statusChip("Status", b.status));
     if (statuses.childNodes.length) card.appendChild(statuses);
 
     const meta = [];
@@ -1556,12 +1830,12 @@ function buildBiddersSection(listing) {
 
     list.appendChild(card);
   }
-  wrap.appendChild(list);
+  cardBody(wrap).appendChild(list);
 
   const foot = document.createElement("div");
   foot.className = "mt-4 text-xs text-ink-400";
   foot.textContent = `${bidders.length} registration${bidders.length === 1 ? "" : "s"}`;
-  wrap.appendChild(foot);
+  cardBody(wrap).appendChild(foot);
   return wrap;
 }
 
@@ -1588,14 +1862,19 @@ const ACTION_ICONS = {
   copy:     `<svg width="11" height="11" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M7 3a2 2 0 00-2 2v1H4a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-1h1a2 2 0 002-2V5a2 2 0 00-2-2H7zm0 2h8v8h-1V8a2 2 0 00-2-2H7V5zM4 8h8v8H4V8z"/></svg>`,
 };
 
-function actionButton({ label, url, palette, icon }) {
+function actionButton({ label, url, palette, icon, noCopy }) {
   const wrap = document.createElement("div");
   wrap.className = "group relative";
 
+  // Icons sit in a centred 24px box but draw at 20px, so edge-bleeding
+  // glyphs (e.g. the YouTube logo) keep margin and never look clipped.
+  const iconBox = "mb-1.5 inline-flex h-6 w-6 items-center justify-center shrink-0 [&_svg]:w-5 [&_svg]:h-5";
+  const labelCls = "w-full text-center leading-tight text-[9px] font-bold uppercase tracking-widest";
+
   if (!url) {
     const dis = document.createElement("div");
-    dis.className = "flex items-center justify-center gap-2 rounded-lg bg-ink-100 ring-1 ring-ink-200 text-ink-400 px-3 py-3 text-sm font-medium cursor-not-allowed select-none";
-    dis.innerHTML = `${icon}<span>${label}</span><span class="ml-1 text-[10px] uppercase tracking-wider">N/A</span>`;
+    dis.className = "flex flex-col items-center justify-center p-4 min-w-0 bg-ink-200 text-ink-400 cursor-not-allowed select-none";
+    dis.innerHTML = `<span class="${iconBox}">${icon}</span><span class="${labelCls}">N/A</span>`;
     wrap.appendChild(dis);
     return wrap;
   }
@@ -1604,9 +1883,11 @@ function actionButton({ label, url, palette, icon }) {
   a.href = url;
   a.target = "_blank";
   a.rel = "noopener noreferrer";
-  a.className = `flex items-center justify-center gap-2 rounded-lg ${palette} text-white px-3 py-3 text-sm font-semibold shadow-sm transition`;
-  a.innerHTML = `${icon}<span>${label}</span><span aria-hidden="true" class="opacity-80">↗</span>`;
+  a.className = `flex flex-col items-center justify-center p-4 min-w-0 ${palette} text-white transition`;
+  a.innerHTML = `<span class="${iconBox} group-hover:scale-110 transition-transform">${icon}</span><span class="${labelCls}">${label}</span>`;
   wrap.appendChild(a);
+
+  if (noCopy) return wrap;
 
   const copyBtn = document.createElement("button");
   copyBtn.type = "button";
@@ -1640,13 +1921,14 @@ const bookletProbeCache = new Map();
 // WORKER-07: always 5 tiles (Maps/VR/YouTube/Photos/Booklet). Booklet behaves
 // exactly like VR tour / YouTube — present but greyed "N/A" when unavailable.
 // 3-up at sm / 5-up at lg so the longest label never cramps at mid widths.
-const ACTIONS_GRID = "mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3";
+const ACTIONS_GRID = "grid grid-cols-5 divide-x divide-white/10 shadow-inner";
 
 const bookletTile = (url) => actionButton({
   label:   "Booklet",
   url,                       // null ⇒ disabled "N/A" tile, same as VR/YouTube
   palette: "bg-sky-700 hover:bg-sky-800",
   icon:    ACTION_ICONS.pdf,
+  noCopy:  true,             // download endpoint — no shareable link to copy
 });
 
 // The Booklet tile is always rendered. Whether the property actually has a
@@ -1710,6 +1992,7 @@ function buildActionsRow(listing) {
       url:     galleryZipUrl,
       palette: "bg-ink-700 hover:bg-ink-800",
       icon:    ACTION_ICONS.download,
+      noCopy:  true,           // zip download endpoint — no shareable link
     }),
     // WORKER-07: always present; N/A until the probe confirms a booklet.
     buildBookletTile(listing, bookletUrl),

@@ -32,6 +32,33 @@ Internal operations dashboard for Belmazad personnel to monitor live property li
 
 ## Updates
 
+### v1.3.0 — Whole-dashboard visual redesign (2026-05-20)
+
+A full visual overhaul. Same data, same flows, **all-new look** — modernised SaaS aesthetic with indigo as the primary, emerald for success, soft slate neutrals, and rounded cards throughout.
+
+**Header**
+- Full-width top bar with a single active **Properties** tab. New **user identity block** on the right (email chip + initials avatar + one-click sign-out).
+
+**Listings**
+- Re-skinned **stat tiles** with hover lift + a subtle **shadow that follows the cursor**.
+- Filters consolidated into a single, consistent dropdown-button design (Sort + Seller / Auction / Property type).
+- New **"Showing N properties"** line next to the Sort control.
+- **Search now also matches property ID** (substring) — type `483` to jump to listing #483.
+- **Property cards** redesigned: 4:3 image, status pill overlay, `#ID` tag, **bold typography**, and a centered **`Dd Hh Mm Ss` countdown** colour-coded by urgency (purple = Coming Soon, amber < 24h, red < 1h, green otherwise; grey on sold/ended).
+
+**Property detail page**
+- Rebuilt as a 12-column layout: **Specifications + Seller & Broker** on the left, **Hero → HubSpot Performance → Offers/Registrations** in the middle, **Auction Timing + bidding details** on the right.
+- New breadcrumb header with **View Public Page** and **Edit in Admin** actions.
+- **Hero**: full-bleed image with a gradient overlay, title/address overlaid in white, and a flush 5-button action row (Google Maps · VR tour · YouTube · Photos · Booklet) in their distinctive colours. Description collapsed into a compact, clickable strip.
+- **Specifications** card with tag-style values, an inline **Active Listing** pill, and a distinctive **Payment terms** pill (finance vs cash).
+- **Seller & Broker** with role-coloured initials avatars and a quiet shimmer-skeleton while contacts resolve (no more legacy block flash).
+- **HubSpot Performance** is now a small dashboard inside the card: three roll-up tiles (Contacts / Open Deals / Open Tasks), **colour-coded leads bars in a fixed order**, a **vertical deals bar chart** in pipeline order with any "Incomplete" stage forced to the end (red), and task badges.
+- **Auction Timing** is now a dark card with a big `Dd Hh Mm Ss` countdown that re-tones as the deadline gets closer.
+- **Offers History** and **Auction Registrations** rows get a coloured left-border indicating their status; the list scrolls inside the card.
+
+**Under the hood**
+- No API, Worker, or data changes — presentation-only. All countdowns, lazy-loaded reports, refresh cooldowns, and operator flows behave exactly as before.
+
 ### v1.2.2.2 — Real seller/broker, auction registrations & named bidders (2026-05-18)
 
 **Detail view**
