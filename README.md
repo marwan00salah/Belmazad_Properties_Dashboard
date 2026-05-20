@@ -32,6 +32,31 @@ Internal operations dashboard for Belmazad personnel to monitor live property li
 
 ## Updates
 
+### v1.4 — Admin landing page + user creation (2026-05-20)
+
+The dashboard now has a proper home and the ability to create users on belmazad.com directly.
+
+**New home page**
+- Visiting the dashboard now lands on a clean **Welcome, {Your Name}** screen with a small list of actions, instead of dropping straight into the listings grid. The greeting fades in once your identity resolves, German-modernist aesthetic — heavy whitespace, ultra-thin large type, tucked into the left edge.
+- **URL structure** updated to make the home/listings split obvious:
+  - `/` → home (welcome + actions)
+  - `/#/properties` → live properties (was the previous home)
+  - `/#/cms/create-user` → create-user form (see below)
+  - Old `/#/admin*` URLs continue to work (alias to the new ones) so existing bookmarks don't break.
+
+**Create users from the dashboard**
+- New **CMS → Create user** action on the home page expands inline (sliding reveal) to surface the user-creation form.
+- One **tabbed form** for all three account types: **Buyer**, **Broker**, **Seller**. v1 supports Individual accounts — Company/Institution accounts continue to be edited in the admin site directly.
+- Submit creates the user on belmazad.com **and** upserts a matching HubSpot contact in one round-trip. The new contact gets your standard `user_type`, `Registered=Yes`, `Lead Source = Admin - Belmazad Dashboard`, lifecycle stage promoted to MQL (only when the contact isn't already further along), and the belmazad.com user id cross-linked on the HubSpot record.
+- Phone is collected as **country code + local number** to match belmazad.com's split-input contract.
+- **Auto-emails** the new user with sign-in details (from `noreply@belmazad.com`) — no manual password handling.
+- Clear success / partial-success / validation-failure banners with full diagnostic info so a bad submit surfaces the actual reason, not a silent dead end.
+
+**Reliability**
+- Quietly self-heals stuck **HubSpot report refreshes**: if a refresh has been pinned in the "running" state for more than 10 minutes (typically a lost callback during n8n maintenance), the next Refresh click recovers automatically instead of staying stuck. Previously these required a manual cache clear by an admin.
+- Header tab simplified to a single **Properties** entry — the brand mark is now the explicit home anchor.
+- Navigation now resets scroll on every page change, so a long detail page can't leak its scroll position into the short home page.
+
 ### v1.3.0 — Whole-dashboard visual redesign (2026-05-20)
 
 A full visual overhaul. Same data, same flows, **all-new look** — modernised SaaS aesthetic with indigo as the primary, emerald for success, soft slate neutrals, and rounded cards throughout.

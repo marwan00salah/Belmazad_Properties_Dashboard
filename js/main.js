@@ -3,12 +3,16 @@ import { getState, setState, subscribe } from "./state.js";
 import { initRouter, navigate } from "./router.js";
 import { renderListings } from "./views/listings.js";
 import { renderDetail } from "./views/detail.js";
+import { renderAdmin } from "./views/admin.js";
 import { WORKER_URL } from "./config.js";
 
 const app = document.getElementById("app");
 
 function renderHeader() {
-  const { loading, lastUpdated, error, userEmail } = getState();
+  const { loading, lastUpdated, error, userEmail, route } = getState();
+  // Route classification for header active states. With the 2026-05-20 URL
+  // restructure, "/" is the landing (home), "/properties" is listings.
+  const onListings = route?.name === "listings";
   const header = document.createElement("header");
   header.className = "sticky top-0 z-30 bg-white/85 backdrop-blur supports-[backdrop-filter]:bg-white/70 border-b border-ink-200/80 shadow-sm";
   const inner = document.createElement("div");
@@ -24,11 +28,9 @@ function renderHeader() {
 
   const nav = document.createElement("nav");
   nav.className = "hidden sm:flex items-center gap-6";
-  const propTab = document.createElement("a");
-  propTab.href = "#/";
-  propTab.className = "relative text-sm font-semibold text-brand-600 hover:text-brand-700 transition";
-  propTab.innerHTML = `Properties<span class="absolute left-0 right-0 -bottom-3 h-0.5 bg-brand-600"></span>`;
-  nav.append(propTab);
+  // Single "Properties" tab → listings. The brand link is the home/landing
+  // anchor; an explicit "Admin"/"Home" tab is redundant with it.
+  nav.append(makeHeaderTab("Properties", "#/properties", onListings));
 
   left.append(brand, nav);
 
@@ -79,6 +81,20 @@ function renderHeader() {
   return header;
 }
 
+// ADMIN-02: header tab factory — active gets the brand-600 underline (matches
+// the pre-ADMIN Properties styling); inactive gets a muted ink-500 hover.
+function makeHeaderTab(label, href, active) {
+  const a = document.createElement("a");
+  a.href = href;
+  a.className = active
+    ? "relative text-sm font-semibold text-brand-600 hover:text-brand-700 transition"
+    : "relative text-sm font-semibold text-ink-500 hover:text-ink-800 transition";
+  a.innerHTML = active
+    ? `${label}<span class="absolute left-0 right-0 -bottom-3 h-0.5 bg-brand-600"></span>`
+    : label;
+  return a;
+}
+
 function initialsFromEmail(email) {
   const local = String(email || "").split("@")[0] || "";
   const parts = local.split(/[.\-_+]+/).filter(Boolean);
@@ -107,10 +123,15 @@ function teardown(node) {
 function render() {
   const { route } = getState();
 
-  // Preserve focus for the search input across re-renders
+  // Preserve focus across re-renders for any focused form field with an id —
+  // covers the listings `#filter-search` debounced search box AND every
+  // admin form input (ADMIN-02). The cursor position is preserved when the
+  // element supports `selectionStart` (input[type=text|email|tel|search],
+  // textarea); select-one inputs don't, so we just refocus.
   const focused = document.activeElement;
-  const restoreSearchFocus = focused && focused.id === "filter-search";
-  const cursorAt = restoreSearchFocus ? focused.selectionStart : null;
+  const focusedIsFormField = focused && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName || "");
+  const focusedId = focusedIsFormField && focused.id ? focused.id : null;
+  const cursorAt = focusedId && typeof focused.selectionStart === "number" ? focused.selectionStart : null;
 
   // Tear down previous tree
   while (app.firstChild) {
@@ -122,12 +143,15 @@ function render() {
 
   if (route.name === "detail") {
     app.appendChild(renderDetail(route.params.propertyId));
+  } else if (route.name === "landing" || route.name === "admin-create-user") {
+    app.appendChild(renderAdmin());
   } else {
+    // listings (or any other unrecognised route fallback)
     app.appendChild(renderListings());
   }
 
-  if (restoreSearchFocus) {
-    const next = document.getElementById("filter-search");
+  if (focusedId) {
+    const next = document.getElementById(focusedId);
     if (next) {
       next.focus();
       if (cursorAt != null) {

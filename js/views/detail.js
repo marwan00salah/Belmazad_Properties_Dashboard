@@ -206,7 +206,7 @@ function renderNotFound(propertyId) {
   wrap.innerHTML = `
     <div class="text-ink-900 text-lg font-semibold mb-1">Listing not found</div>
     <p class="text-ink-500 text-sm mb-4">No listing with ID <code class="px-1.5 py-0.5 rounded bg-ink-100 text-ink-700">${propertyId}</code> in the current dataset.</p>
-    <a href="#/" class="inline-flex items-center gap-2 rounded-lg bg-brand-700 hover:bg-brand-800 text-white px-4 py-2 text-sm font-medium transition shadow-sm">Back to listings</a>`;
+    <a href="#/properties" class="inline-flex items-center gap-2 rounded-lg bg-brand-700 hover:bg-brand-800 text-white px-4 py-2 text-sm font-medium transition shadow-sm">Back to listings</a>`;
   return wrap;
 }
 
@@ -271,7 +271,7 @@ export function renderDetail(propertyId) {
   const crumbLeft = document.createElement("div");
   crumbLeft.className = "flex items-center gap-3 text-sm";
   const back = document.createElement("a");
-  back.href = "#/";
+  back.href = "#/properties";
   back.className = "inline-flex items-center gap-1.5 text-brand-600 font-semibold hover:underline transition";
   back.innerHTML = `<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M12.78 5.22a.75.75 0 010 1.06L9.06 10l3.72 3.72a.75.75 0 11-1.06 1.06l-4.25-4.25a.75.75 0 010-1.06l4.25-4.25a.75.75 0 011.06 0z" clip-rule="evenodd"/></svg> Back to Listings`;
   const sep = document.createElement("span");

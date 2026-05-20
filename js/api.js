@@ -58,6 +58,29 @@ export async function fetchWhoAmI() {
   }
 }
 
+// ADMIN-01/02: POST /admin/user. Any signed-in CF Access user can call.
+// Body shape per the Worker route: { type, fields }. Returns the Worker's
+// full response { status, type, newUserId?, createdBy, upstreamStatus?,
+// upstreamLocation?, successMsg?, hubspot?:{status,contactId,...}, ... }
+// wrapped in { ok, status, data }. Throws AuthRequiredError on CF Access
+// cookie-blocked rejection — caller routes to sign-in panel.
+export async function createAdminUser({ type, fields }) {
+  let res;
+  try {
+    res = await fetch(new URL("admin/user", WORKER_URL).toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ type, fields }),
+    });
+  } catch {
+    throw new AuthRequiredError();
+  }
+  let data = null;
+  try { data = await res.json(); } catch {}
+  return { ok: res.ok, status: res.status, data };
+}
+
 // WORKER-05: operator-only proxy to the buyer-pipeline auction initiate
 // endpoint. Always returns { ok, status, data } — never throws — so the
 // modal's click handler can always render either the success payload or

@@ -32,6 +32,11 @@
   </script>
 
   <link rel="stylesheet" href="./css/styles.css">
+
+  <!-- particles.js (CDN) — used only by js/views/admin.js for the #/ landing
+       background. Loaded synchronously so renderAdminLanding() can call
+       particlesJS() on its rAF tick without coordinating script-load events. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/particles.js/2.0.0/particles.min.js"></script>
 </head>
 <body class="bg-ink-50 text-ink-900 antialiased">
   <div id="app" class="min-h-screen flex flex-col"></div>

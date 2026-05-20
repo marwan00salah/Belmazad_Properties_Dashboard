@@ -38,6 +38,15 @@ const initial = {
   // resolve cache (keyed by BUYER id, not propertyId — a buyer recurs across
   // properties). Lazily hydrated to name the highest bidder/offerer.
   buyers: {},
+  // ADMIN-02: admin "Create user" page state — current tab + last submit
+  // outcome. Form field values live in a module cache in views/admin.js so
+  // per-keystroke setState isn't needed (avoids whole-tree re-renders).
+  admin: {
+    type: "buyer",       // "buyer" | "broker" | "seller" — selected tab
+    submitting: false,   // toggled while the POST /admin/user is in-flight
+    result: null,        // last successful Worker response (status:"ok" | "partial")
+    error: null,         // last error (validation/network) for inline banner
+  },
 };
 
 let state = initial;
@@ -97,6 +106,11 @@ export function setBuyer(buyerId, slice) {
   setState({
     buyers: { ...state.buyers, [id]: slice },
   });
+}
+
+// ADMIN-02: shallow-merge a patch into the admin slice and notify.
+export function setAdmin(patch) {
+  setState({ admin: { ...state.admin, ...patch } });
 }
 
 export function resetFilters() {
