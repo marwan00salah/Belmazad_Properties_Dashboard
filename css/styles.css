@@ -65,3 +65,52 @@ img[data-fallback="true"] {
 .custom-scrollbar::-webkit-scrollbar { width: 4px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
 .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+
+/* AGENT-07: chat typing-indicator caret. 4×16 px brand bar pulses 0.8 s
+   steady — same cadence as the chatTrigger's hosted UI, translated to the
+   dashboard's brand-indigo palette. */
+@keyframes caret-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
+.caret-blink { animation: caret-blink 0.8s infinite; }
+
+/* AGENT-07: chat message bubble entrance. 250 ms fade + slide-up. */
+@keyframes bubble-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.bubble-in { animation: bubble-in 250ms ease-out both; }
+
+/* AGENT-07: shimmer-sweep across text via background-clip:text. A gradient
+   with dim→bright→dim is panned over the text — the bright middle of the
+   gradient moves L→R (background-position 200% → -200%). Total cycle is
+   3500ms: 3000ms for the sweep (0% → 85.71% of the keyframes) + 500ms hold
+   at the end position (85.71% → 100%) so the eye gets a break before the
+   next sweep restarts. `no-repeat` prevents a second copy of the gradient
+   re-entering when bg-position pushes past the element. Used for the 72px
+   "start typing" empty-state hero (and any future shimmer-text site). */
+@keyframes shimmer-sweep {
+  0%      { background-position: 200% 0; }
+  85.71%  { background-position: -200% 0; }
+  100%    { background-position: -200% 0; }
+}
+.shimmer-text {
+  /* Asymmetric gradient: ink on the trailing (left) side, brand indigo
+     on the leading (right) side. As the band sweeps L→R over a pixel,
+     the pixel first sees the right half of the gradient (its fade-in
+     phase, brand) and then the left half (its fade-out phase, ink). The
+     stops at 40%/60% give a smooth blend through the band's peak instead
+     of a hard ink-to-brand line. */
+  background-image: linear-gradient(
+    90deg,
+    rgba(15, 23, 42, 0.12)  0%,    /* ink dim — trailing edge of band */
+    rgba(15, 23, 42, 0.92)  40%,   /* ink peak — fade-out phase */
+    rgba(79, 70, 229, 0.92) 60%,   /* brand peak — fade-in phase */
+    rgba(79, 70, 229, 0.12) 100%   /* brand dim — leading edge */
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-sweep 3500ms linear infinite;
+}

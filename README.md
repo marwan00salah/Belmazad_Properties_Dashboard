@@ -32,6 +32,29 @@ Internal operations dashboard for Belmazad personnel to monitor live property li
 
 ## Updates
 
+### v1.5 — AI Agents (2026-05-22)
+
+The dashboard now hosts conversational AI agents alongside the listings and CMS surfaces.
+
+**First agent: Buyer-Seller Matcher**
+- A new **AI Agents** tab in the header opens a directory of available agents (one today — more to follow).
+- The **Buyer-Seller Matcher** is a bilingual (Arabic / English) assistant for two flows: **Add a property request** (intake — buyers, sellers, brokers; saved straight to the property book) and **Search existing properties** (filter the book by type, location, budget, etc.). Pick a mode on entry and the conversation locks into it for the session.
+- Natural-language input — type the way you'd talk: *"Buyer, 3-bed apartment in New Cairo, budget 4M EGP, August move-in"* — and the assistant extracts the structured fields, asks for anything missing, then saves.
+- Each line auto-detects direction, so Arabic and English mix naturally in the same conversation.
+- The reply renders with proper formatting: numbered lists, bullet sub-items, bold highlights, and line breaks — not a wall of text.
+
+**Visual feel**
+- The chat surface adopts the same Bauhaus / German-modernist look as the home page: full-viewport, no chat-window chrome, indigo particles drifting in the background, ultra-thin lowercase typography. A giant shimmer **"start typing"** invites you in.
+- User messages anchor to the right edge of the page, the assistant occupies the wider left side — turns read like a real conversation laid out across the screen.
+
+**Continuity**
+- Conversations **persist across page reloads** for each agent. Refresh, switch tabs, come back — the thread is still there. A discreet *new conversation* link in the corner resets when you're done.
+- Universal sign-in: every page (home, listings, detail, CMS, AI agents) now prompts you to sign in when your session expires, instead of any showing blank screens. After sign-in you land back on the exact page you were trying to open.
+
+**Polish**
+- Home-page navigation now behaves as an accordion: opening **ai agents** auto-closes **cms** (and vice versa). Tidier when both groups have children.
+- Long-descender letters (`g`, `p`, `y`) no longer get clipped at the bottom of the home-page action links.
+
 ### v1.4 — Admin landing page + user creation (2026-05-20)
 
 The dashboard now has a proper home and the ability to create users on belmazad.com directly.

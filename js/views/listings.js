@@ -2,9 +2,9 @@ import { renderStatsBar } from "../components/statsBar.js";
 import { renderFilters, sortDropdown } from "../components/filters.js";
 import { renderCard } from "../components/card.js";
 import { skeletonGrid, skeletonStats } from "../components/skeleton.js";
+import { renderSignInPanel } from "../components/signInPanel.js";
 import { getState, resetFilters } from "../state.js";
 import { isTrue } from "../format.js";
-import { WORKER_URL } from "../config.js";
 
 function filterAndSort(listings, filters, sort) {
   const q = filters.search.trim().toLowerCase();
@@ -109,31 +109,6 @@ export function renderListings() {
 }
 
 // GEN-01: panel shown when the dashboard's fetch is blocked by Cloudflare
-// Access because the user has no session. The Sign-in button does a
-// top-level same-tab navigation to the Worker's /auth-return endpoint
-// with the current dashboard URL as the `dest` parameter. CF Access
-// intercepts, authenticates, then passes the request through to the
-// Worker, which 302s back to `dest`. The dashboard reloads with the
-// Access cookie now in the jar and fetches data automatically — no
-// new tab, no manual Retry.
-function renderSignInPanel() {
-  const wrap = document.createElement("div");
-  wrap.className = "mx-auto max-w-md text-center bg-white rounded-2xl border border-ink-100 shadow-sm p-8 mt-8";
-
-  const signInUrl = `${WORKER_URL}auth-return?dest=${encodeURIComponent(window.location.href)}`;
-
-  wrap.innerHTML = `
-    <svg width="40" height="40" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="mx-auto mb-3 text-brand-700">
-      <path fill-rule="evenodd" d="M10 1l7 3v6c0 4.5-3 8-7 9-4-1-7-4.5-7-9V4l7-3zm0 5a1.5 1.5 0 100 3 1.5 1.5 0 000-3zm-3 6.5a3 3 0 016 0V13H7v-.5z" clip-rule="evenodd"/>
-    </svg>
-    <div class="text-ink-900 text-lg font-semibold mb-1">Sign in to view listings</div>
-    <p class="text-ink-500 text-sm mb-5">This dashboard is restricted to authorized Belmazad team members. Sign in with a permitted email address to continue.</p>
-    <a id="signin-btn" href="${signInUrl}"
-       class="inline-flex items-center gap-2 rounded-lg bg-brand-700 hover:bg-brand-800 text-white px-5 py-2 text-sm font-semibold shadow-sm transition">
-      <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M3 3a1 1 0 011-1h6a1 1 0 011 1v1a1 1 0 11-2 0H5v12h4v-1a1 1 0 112 0v1a1 1 0 01-1 1H4a1 1 0 01-1-1V3zm10.293 4.293a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 01-1.414-1.414L14.586 12H9a1 1 0 110-2h5.586l-1.293-1.293a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
-      Sign in
-    </a>
-    <p class="text-ink-400 text-xs mt-3">You'll be redirected back here automatically after signing in.</p>`;
-
-  return wrap;
-}
+// Access because the user has no session. As of GEN-03, the implementation
+// lives in js/components/signInPanel.js so every route can use it; this
+// view imports it at the top alongside other shared components.

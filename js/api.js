@@ -81,6 +81,41 @@ export async function createAdminUser({ type, fields }) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// AGENT-05: POST /ai-agents/chat. Any signed-in CF Access user. The Worker
+// (AGENT-06) rate-limits + audit-logs + forwards to the agent's n8n
+// chatTrigger webhook with the X-Belmazad-N8N-Secret header. Wire payload
+// matches the deployed n8n contract — { action:"sendMessage", sessionId,
+// chatInput } — built server-side; here we just pass the user-facing
+// fields. modePrefix is prepended to chatInput by the Worker (only on the
+// first message of a session); the chat component is responsible for
+// passing "" once a session has already started.
+//
+// Returns { ok, status, data } — same wrapper as createAdminUser. data
+// shape on success: { status:"ok", reply, meta:{ms,agentId} }. On error:
+// { status:"error", error, ... }. Throws AuthRequiredError on CF Access
+// cookie-blocked rejection so the listings view's auth fallback kicks in.
+export async function sendAgentMessage({ agentId, sessionId, message, modePrefix }) {
+  let res;
+  try {
+    res = await fetch(new URL("ai-agents/chat", WORKER_URL).toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        agentId,
+        sessionId,
+        message,
+        modePrefix: modePrefix || "",
+      }),
+    });
+  } catch {
+    throw new AuthRequiredError();
+  }
+  let data = null;
+  try { data = await res.json(); } catch {}
+  return { ok: res.ok, status: res.status, data: data || {} };
+}
+
 // WORKER-05: operator-only proxy to the buyer-pipeline auction initiate
 // endpoint. Always returns { ok, status, data } — never throws — so the
 // modal's click handler can always render either the success payload or

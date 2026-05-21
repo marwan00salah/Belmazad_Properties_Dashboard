@@ -14,6 +14,14 @@ function parse(hash) {
   if (first === "property" && second) return { name: "detail", params: { propertyId: second } };
   if (first === "properties") return { name: "listings", params: {} };
   if (first === "cms" && second === "create-user") return { name: "admin-create-user", params: {} };
+  // AGENT-02: #/ai-agents (index — grid of available agents) and
+  // #/ai-agents/:agentId (per-agent native chat surface). The component
+  // (AGENT-07) validates the id against the AGENTS registry; an unknown
+  // id renders a small 404-style card with a link back to the index.
+  if (first === "ai-agents") {
+    if (second) return { name: "ai-agent", params: { agentId: second } };
+    return { name: "ai-agents-index", params: {} };
+  }
   if (first === "admin") {
     if (second === "create-user") return { name: "admin-create-user", params: {} };  // alias
     return { name: "landing", params: {} };                                            // alias

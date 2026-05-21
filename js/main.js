@@ -4,6 +4,9 @@ import { initRouter, navigate } from "./router.js";
 import { renderListings } from "./views/listings.js";
 import { renderDetail } from "./views/detail.js";
 import { renderAdmin } from "./views/admin.js";
+import { renderAiAgents } from "./views/ai-agents.js";
+import { renderSignInPanel } from "./components/signInPanel.js";
+import { PARTICLES_CONFIG, destroyParticles } from "./utils/particles.js";
 import { WORKER_URL } from "./config.js";
 
 const app = document.getElementById("app");
@@ -12,7 +15,10 @@ function renderHeader() {
   const { loading, lastUpdated, error, userEmail, route } = getState();
   // Route classification for header active states. With the 2026-05-20 URL
   // restructure, "/" is the landing (home), "/properties" is listings.
+  // AGENT-07: the AI Agents area gets its own tab; both index and per-agent
+  // routes activate it.
   const onListings = route?.name === "listings";
+  const onAiAgents = route?.name === "ai-agents-index" || route?.name === "ai-agent";
   const header = document.createElement("header");
   header.className = "sticky top-0 z-30 bg-white/85 backdrop-blur supports-[backdrop-filter]:bg-white/70 border-b border-ink-200/80 shadow-sm";
   const inner = document.createElement("div");
@@ -28,9 +34,12 @@ function renderHeader() {
 
   const nav = document.createElement("nav");
   nav.className = "hidden sm:flex items-center gap-6";
-  // Single "Properties" tab → listings. The brand link is the home/landing
-  // anchor; an explicit "Admin"/"Home" tab is redundant with it.
-  nav.append(makeHeaderTab("Properties", "#/properties", onListings));
+  // Properties + AI Agents tabs. The brand link is the home/landing
+  // anchor; explicit "Admin"/"Home" tabs are redundant with it.
+  nav.append(
+    makeHeaderTab("Properties", "#/properties", onListings),
+    makeHeaderTab("AI Agents", "#/ai-agents", onAiAgents),
+  );
 
   left.append(brand, nav);
 
@@ -120,8 +129,52 @@ function teardown(node) {
   for (const child of node.children) teardown(child);
 }
 
+// AGENT-07 polish (2026-05-22): the indigo-dotted particles background
+// belongs to specific routes (admin landing + AI Agents area), but the
+// particles CANVAS must persist across the full-tree teardown + re-mount
+// that fires on every setState — otherwise sending a chat message destroys
+// + re-inits the canvas, producing visible thrash ("background goes
+// crazy"). Solution: mount the canvas at the body level, outside the
+// render tree, and sync it only when the route NAME actually changes.
+const PARTICLES_ROUTES = new Set(["landing", "ai-agents-index", "ai-agent"]);
+let _particlesNode = null;
+let _particlesRouteName = null;  // route name at mount time
+
+function syncBackground(routeName) {
+  if (_particlesRouteName === routeName) return;  // no-op
+  const wants = PARTICLES_ROUTES.has(routeName);
+  if (wants && !_particlesNode) {
+    const div = document.createElement("div");
+    div.id = "particles-bg";
+    // z-index:-1 keeps particles BEHIND #app's normal-flow content
+    // (which is `position:static`, painted in stacking pass 3) — putting
+    // it in pass 2 (negative-z-index positioned descendants). Body's
+    // bg-ink-50 still paints first (pass 1) so the dots show against the
+    // dashboard's regular page colour.
+    div.style.cssText = "position:fixed;inset:0;z-index:-1;pointer-events:none;";
+    document.body.insertBefore(div, document.body.firstChild);
+    _particlesNode = div;
+    // rAF so the div is in the DOM tree before particlesJS reads it.
+    requestAnimationFrame(() => {
+      if (typeof window.particlesJS === "function") {
+        try { window.particlesJS("particles-bg", PARTICLES_CONFIG); }
+        catch (_) { /* particles.js init can throw on edge cases — ignore */ }
+      }
+    });
+  } else if (!wants && _particlesNode) {
+    destroyParticles();
+    _particlesNode.remove();
+    _particlesNode = null;
+  }
+  _particlesRouteName = routeName;
+}
+
 function render() {
   const { route } = getState();
+  // Sync the persistent body-level particles BEFORE the per-render tear-
+  // down. This is the only state-derived side effect that has to escape
+  // the render tree's lifecycle.
+  syncBackground(route?.name);
 
   // Preserve focus across re-renders for any focused form field with an id —
   // covers the listings `#filter-search` debounced search box AND every
@@ -141,10 +194,22 @@ function render() {
 
   app.appendChild(renderHeader());
 
-  if (route.name === "detail") {
+  // GEN-03: universal auth gate — when refresh() flagged
+  // `errorKind:"auth"` (CF Access cookie missing / expired), render the
+  // shared sign-in panel and short-circuit the route dispatch. Was
+  // previously gated inside listings.js only, so non-listings routes
+  // (landing, admin, ai-agents) rendered their normal shell with no
+  // hint to the user that they needed to sign in.
+  const { errorKind } = getState();
+  if (errorKind === "auth") {
+    app.appendChild(renderSignInPanel());
+  } else if (route.name === "detail") {
     app.appendChild(renderDetail(route.params.propertyId));
   } else if (route.name === "landing" || route.name === "admin-create-user") {
     app.appendChild(renderAdmin());
+  } else if (route.name === "ai-agents-index" || route.name === "ai-agent") {
+    // AGENT-07: AI Agents area — index grid or per-agent chat surface.
+    app.appendChild(renderAiAgents());
   } else {
     // listings (or any other unrecognised route fallback)
     app.appendChild(renderListings());

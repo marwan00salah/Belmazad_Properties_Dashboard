@@ -17,6 +17,7 @@
 
 import { getState, setAdmin } from "../state.js";
 import { createAdminUser, AuthRequiredError } from "../api.js";
+import { AGENTS } from "../agents.js";
 
 // ── Form-value cache (survives re-renders, separate from state slice) ─────
 
@@ -89,29 +90,9 @@ const LOOKING_PROPERTY = [
 // lines (#a5b4fc = brand-300). Hover-repulse + click-bubble interactivity.
 // The library is loaded from CDN in index.html. Editing this config will
 // update the live background on the next route-render.
-const PARTICLES_CONFIG = {
-  particles: {
-    number: { value: 200, density: { enable: true, value_area: 962 } },
-    color: { value: "#4f46e5" },
-    shape: { type: "circle", stroke: { width: 0, color: "#000000" }, polygon: { nb_sides: 8 }, image: { src: "img/github.svg", width: 100, height: 100 } },
-    opacity: { value: 0.5, random: true, anim: { enable: false, speed: 1, opacity_min: 0.1, sync: false } },
-    size: { value: 1, random: true, anim: { enable: false, speed: 9.744926547616142, size_min: 0.1, sync: false } },
-    line_linked: { enable: true, distance: 150, color: "#a5b4fc", opacity: 0.4, width: 1 },
-    move: { enable: true, speed: 6, direction: "none", random: false, straight: false, out_mode: "out", bounce: false, attract: { enable: false, rotateX: 600, rotateY: 1200 } },
-  },
-  interactivity: {
-    detect_on: "window",
-    events: { onhover: { enable: true, mode: "repulse" }, onclick: { enable: true, mode: "bubble" }, resize: true },
-    modes: {
-      grab: { distance: 633.4202255950493, line_linked: { opacity: 1 } },
-      bubble: { distance: 400, size: 5, duration: 0.2, opacity: 0.14385614385614387, speed: 3 },
-      repulse: { distance: 160, duration: 0.4 },
-      push: { particles_nb: 4 },
-      remove: { particles_nb: 2 },
-    },
-  },
-  retina_detect: true,
-};
+// PARTICLES_CONFIG moved to `js/utils/particles.js` (AGENT-07) so the
+// AI Agents view can reuse the same indigo-dotted background as this
+// admin landing — keeps the two surfaces visually consistent.
 
 // ── Renderers ─────────────────────────────────────────────────────────────
 
@@ -150,17 +131,11 @@ function renderAdminLanding() {
   root.className = "relative h-[calc(100vh-68px)] grid grid-cols-6 grid-rows-6 transition-opacity duration-[900ms] opacity-0 overflow-hidden";
   // 72px ≈ header height; centres the content below the sticky header.
 
-  // ── Particles background (FIRST child — painted behind grid items) ────
-  // particles.js fills #particles-bg with an animated canvas. Indigo dots
-  // on lighter-indigo linked lines (config palette matches brand colours).
-  // `pointer-events-none` so clicks pass through to the action links;
-  // interactivity (hover-repulse, click-bubble) still works because the
-  // config uses `detect_on: "window"` — listeners attach to window, not
-  // the canvas. Grid items follow in DOM order and naturally paint above.
-  const particlesBg = document.createElement("div");
-  particlesBg.id = "particles-bg";
-  particlesBg.className = "absolute inset-0 pointer-events-none";
-  root.appendChild(particlesBg);
+  // Particles background is now mounted at the body level by main.js's
+  // syncBackground() — persists across the full-tree re-mount that fires
+  // on every setState. The view used to mount its own canvas here; that
+  // was destroying + re-initing on every state change, producing visible
+  // thrash. See main.js for the current lifecycle.
 
   // ── Actions cell (middle row, cols 2–4) ───────────────────────────────
   // `relative z-10` promotes this above the absolute particles canvas —
@@ -199,13 +174,17 @@ function renderAdminLanding() {
   // minimalist feel further. Each action shares the same `actionLink()`
   // factory so future actions stay stylistically consistent.
   //
-  // Hierarchy (2026-05-20): `cms` is a click-to-expand parent that reveals
-  // its children (currently just `create user`) inline; `live properties`
-  // gets pushed down by the expanding group via natural document flow — no
-  // overlap. The expand/collapse uses the grid-template-rows 0fr↔1fr trick
-  // so the slide animates smoothly even with auto-sized content.
+  // Hierarchy (2026-05-21, AGENT-01): three siblings — `ai agents` (NEW
+  // expandable parent, AGENT-03/AGENT-07; children sourced from AGENTS
+  // registry so adding agent #2 propagates here automatically), `cms`
+  // (unchanged expandable parent for `create user`), `live properties`
+  // (leaf link to the listings view). Live properties gets pushed down
+  // by either expanding group via natural document flow — no overlap.
+  // The expand/collapse uses the grid-template-rows 0fr↔1fr trick so the
+  // slide animates smoothly even with auto-sized content.
   const nav = document.createElement("nav");
   nav.className = "space-y-4";
+  nav.appendChild(buildAiAgentsGroup());
   nav.appendChild(buildCmsGroup());
   nav.appendChild(actionLink("Live properties", "#/properties"));
   actionsCell.appendChild(nav);
@@ -213,41 +192,21 @@ function renderAdminLanding() {
   root.appendChild(actionsCell);
   root.appendChild(greetingCell);
 
-  // Particles init + (when name is ready) fade-in. Both wait one rAF so the
-  // root is mounted in the DOM (particles.js needs to find #particles-bg)
-  // and the browser has applied opacity-0 + computed styles before we swap
-  // to opacity-100 (otherwise no transition plays). If the CDN script
-  // hasn't loaded yet, particles silently no-ops; the next render retries.
-  requestAnimationFrame(() => {
-    if (typeof window.particlesJS === "function") {
-      try { window.particlesJS("particles-bg", PARTICLES_CONFIG); }
-      catch (_) { /* particles.js init can throw on edge cases — ignore */ }
-    }
-    if (nameReady) {
+  // Fade-in when the name is ready (particles init runs inside
+  // mountParticles via its own rAF). Double-rAF for the fade so the
+  // browser has applied opacity-0 + computed styles before we swap
+  // to opacity-100 (otherwise no transition plays).
+  if (nameReady) {
+    requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         root.classList.remove("opacity-0");
         root.classList.add("opacity-100");
       });
-    }
-  });
+    });
+  }
 
-  // Cleanup on route change — main.js's teardown() walks descendants and
-  // calls __cleanup before removing the tree. Destroy any particles
-  // instances so their rAF loops + window-level event listeners (detect_on:
-  // "window") don't outlive this view.
-  root.__cleanup = () => {
-    if (window.pJSDom && window.pJSDom.length) {
-      try {
-        window.pJSDom.forEach((dom) => {
-          if (dom && dom.pJS && dom.pJS.fn && dom.pJS.fn.vendors &&
-              typeof dom.pJS.fn.vendors.destroypJS === "function") {
-            dom.pJS.fn.vendors.destroypJS();
-          }
-        });
-      } catch (_) { /* best-effort */ }
-      window.pJSDom = [];
-    }
-  };
+  // No view-level cleanup needed: particles are managed at the body
+  // level by main.js's syncBackground() on route changes.
 
   return root;
 }
@@ -261,6 +220,25 @@ function actionLink(label, href) {
   a.className = "block text-4xl font-thin tracking-tight text-ink-900 hover:text-brand-600 transition-colors duration-200 lowercase";
   a.textContent = label;
   return a;
+}
+
+// ADMIN-07: accordion behavior for the landing nav's click-to-expand groups.
+// When one group opens we collapse every other expandable wrap inside the
+// same <nav>, so only one submenu is visible at a time — keeps the page
+// tidy and avoids `live properties` getting pushed down by two stacks at
+// once. Each expandable wrap is marked with the `landing-expand-wrap` class
+// so a single DOM query finds all siblings. DOM-scoped (not module-scoped)
+// so it stays safe across renderAdminLanding rebuilds — main.js teardown
+// drops the old tree and the new wraps register fresh on the next mount.
+function collapseSiblingWraps(keepOpen) {
+  const nav = keepOpen.closest("nav");
+  if (!nav) return;
+  nav.querySelectorAll(".landing-expand-wrap").forEach((w) => {
+    if (w !== keepOpen) {
+      w.classList.remove("grid-rows-[1fr]");
+      w.classList.add("grid-rows-[0fr]");
+    }
+  });
 }
 
 // Click-to-expand "cms" group: visually identical to a top-level actionLink
@@ -279,15 +257,18 @@ function buildCmsGroup() {
   parent.type = "button";
   // Match actionLink() styling exactly (same hover/colour/weight) so the
   // parent reads as a sibling of the other actions — just one that opens
-  // a submenu instead of navigating.
-  parent.className = "block text-4xl font-thin tracking-tight text-ink-900 hover:text-brand-600 transition-colors duration-200 lowercase text-left w-full";
+  // a submenu instead of navigating. The `pb-1` (STYLE-08) is preventative:
+  // "cms" itself has no descenders, but future parent labels might.
+  parent.className = "block text-4xl font-thin tracking-tight text-ink-900 hover:text-brand-600 transition-colors duration-200 lowercase text-left w-full pb-1";
   parent.textContent = "cms";
 
   // Collapsible row. `grid-rows-[0fr]` collapses the child grid track to
   // zero height; `grid-rows-[1fr]` lets it grow to natural content height.
-  // Tailwind arbitrary values handle the literal `0fr`/`1fr` tracks.
+  // Tailwind arbitrary values handle the literal `0fr`/`1fr` tracks. The
+  // `landing-expand-wrap` marker (ADMIN-07) lets collapseSiblingWraps()
+  // find every expandable group in the nav so opening one closes the rest.
   const wrap = document.createElement("div");
-  wrap.className = "grid grid-rows-[0fr] transition-[grid-template-rows] duration-300 ease-in-out";
+  wrap.className = "landing-expand-wrap grid grid-rows-[0fr] transition-[grid-template-rows] duration-300 ease-in-out";
 
   const children = document.createElement("div");
   // overflow-hidden clips the inner content during the 0fr → 1fr transition
@@ -298,14 +279,73 @@ function buildCmsGroup() {
 
   const createUser = actionLink("create user", "#/cms/create-user");
   // ml-16 = two indents (4rem ≈ 64px) — same value as the Welcome → Name
-  // indent — visually links the child to its parent.
-  createUser.classList.add("ml-16", "pt-4");
+  // indent — visually links the child to its parent. `pb-1` (STYLE-08)
+  // gives descenders room inside the `overflow-hidden` wrap below; "create
+  // user" has none today but a future child might.
+  createUser.classList.add("ml-16", "pt-4", "pb-1");
 
   children.appendChild(createUser);
   wrap.appendChild(children);
 
   parent.addEventListener("click", () => {
     const isOpen = wrap.classList.contains("grid-rows-[1fr]");
+    // ADMIN-07: only collapse siblings when transitioning closed→open; on
+    // a self-toggle to closed there's nothing else to coordinate.
+    if (!isOpen) collapseSiblingWraps(wrap);
+    wrap.classList.toggle("grid-rows-[0fr]", isOpen);
+    wrap.classList.toggle("grid-rows-[1fr]", !isOpen);
+  });
+
+  group.appendChild(parent);
+  group.appendChild(wrap);
+  return group;
+}
+
+// AGENT-01: "ai agents" expandable group — structural twin of buildCmsGroup
+// above (same 0fr↔1fr grid-template-rows slide, same actionLink styling,
+// same ml-16+pt-4 indent). Children are NOT hard-coded — they iterate the
+// AGENTS registry (js/agents.js), so adding an agent there propagates here
+// automatically without any landing-page edit. Each child links to
+// #/ai-agents/<agentId>, which the chat surface (AGENT-07) renders.
+function buildAiAgentsGroup() {
+  const group = document.createElement("div");
+
+  const parent = document.createElement("button");
+  parent.type = "button";
+  // `pb-1` (STYLE-08) makes room for the `g` descender in "ai agents" —
+  // Tailwind's text-4xl line-height (2.5rem over 2.25rem font-size) is
+  // too tight to fit descenders cleanly in font-thin system-ui.
+  parent.className = "block text-4xl font-thin tracking-tight text-ink-900 hover:text-brand-600 transition-colors duration-200 lowercase text-left w-full pb-1";
+  parent.textContent = "ai agents";
+
+  // `landing-expand-wrap` (ADMIN-07): marker that collapseSiblingWraps()
+  // queries to find every expandable group in the nav, so opening this one
+  // closes any other open group.
+  const wrap = document.createElement("div");
+  wrap.className = "landing-expand-wrap grid grid-rows-[0fr] transition-[grid-template-rows] duration-300 ease-in-out";
+
+  const children = document.createElement("div");
+  children.className = "overflow-hidden";
+
+  // Iterate the registry. Order follows Object.entries() insertion order,
+  // which matches the order agents are declared in js/agents.js — so the
+  // canonical agent listing lives there, not here.
+  for (const [id, def] of Object.entries(AGENTS)) {
+    const link = actionLink(`${def.label.toLowerCase()} agent`, `#/ai-agents/${id}`);
+    // `pb-1` (STYLE-08): the trailing "agent" has a `g` descender that the
+    // wrap's `overflow-hidden` would otherwise clip; 4 px of padding-bottom
+    // keeps the line-height intact while giving the descender room.
+    link.classList.add("ml-16", "pt-4", "pb-1");
+    children.appendChild(link);
+  }
+
+  wrap.appendChild(children);
+
+  parent.addEventListener("click", () => {
+    const isOpen = wrap.classList.contains("grid-rows-[1fr]");
+    // ADMIN-07: only collapse siblings when transitioning closed→open; on
+    // a self-toggle to closed there's nothing else to coordinate.
+    if (!isOpen) collapseSiblingWraps(wrap);
     wrap.classList.toggle("grid-rows-[0fr]", isOpen);
     wrap.classList.toggle("grid-rows-[1fr]", !isOpen);
   });
@@ -335,18 +375,9 @@ function renderCreateUser() {
   const root = document.createElement("div");
   root.className = "mx-auto w-full max-w-3xl p-4 sm:p-6 lg:p-8 space-y-6";
 
-  // Title block — breadcrumb now reflects the 2026-05-20 URL plan:
-  // Home (#/, the landing) > CMS (text-only, no #/cms index yet) > Create user.
   const title = document.createElement("div");
   title.innerHTML = `
-    <div class="flex items-center gap-3 text-xs font-semibold text-ink-500">
-      <a href="#/" class="hover:text-ink-800 transition">Home</a>
-      <span aria-hidden="true">/</span>
-      <span>CMS</span>
-      <span aria-hidden="true">/</span>
-      <span>Create user</span>
-    </div>
-    <h1 class="mt-2 text-3xl font-extrabold tracking-tight text-ink-900">Create user</h1>
+    <h1 class="text-3xl font-extrabold tracking-tight text-ink-900">Create user</h1>
     <p class="mt-2 text-sm text-ink-600">Create a buyer, broker, or seller account directly on belmazad.com. The new user receives sign-in details by email from <code class="rounded bg-ink-100 px-1.5 py-0.5 text-xs">noreply@belmazad.com</code>. v1 supports Individual accounts only — Company / Institution accounts stay in the admin site.</p>
   `;
   root.appendChild(title);

@@ -43,6 +43,10 @@ function kvList(rows, { columns = 2, gapY = 3 } = {}) {
 // Unified card chrome (matches the HubSpot Performance card): a header strip
 // (bold ink-900 title, light divider) over a padded body. Content goes into
 // `cardBody(wrap)`; the header's right side is `wrap._header` (for pills etc).
+// Note: was briefly exported for the AI Agents chat (AGENT-07), but the
+// homepage-feel redesign dropped card chrome from the chat — so this is
+// internal-only again. Keep this comment until a future card-needing
+// component lands.
 function cardShell(title) {
   const wrap = document.createElement("section");
   wrap.className = "rounded-2xl bg-white shadow-sm border border-ink-100 overflow-hidden";
