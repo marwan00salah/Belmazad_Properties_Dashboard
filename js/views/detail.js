@@ -298,9 +298,14 @@ export function renderDetail(propertyId) {
   adminLink.href = `https://belmazad.com/admin/property/add/${encodeURIComponent(listing.propertyId)}`;
   adminLink.target = "_blank";
   adminLink.rel = "noopener noreferrer";
-  adminLink.className = "inline-flex items-center gap-1.5 rounded-xl bg-brand-600 border border-brand-700 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 shadow-sm transition";
-  adminLink.innerHTML = `Edit in Admin <span aria-hidden="true">↗</span>`;
-  crumbRight.append(publicLink, adminLink);
+  adminLink.className = "inline-flex items-center gap-1.5 rounded-xl bg-white border border-ink-200 px-4 py-2 text-sm font-semibold text-ink-700 hover:bg-ink-50 shadow-sm transition";
+  adminLink.innerHTML = `Open in Admin <span aria-hidden="true">↗</span>`;
+  // ADD-PROPERTY edit: open this listing in the in-dashboard CMS wizard.
+  const cmsEdit = document.createElement("a");
+  cmsEdit.href = `#/cms/edit-property/${encodeURIComponent(listing.propertyId)}`;
+  cmsEdit.className = "inline-flex items-center gap-1.5 rounded-xl bg-brand-600 border border-brand-700 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 shadow-sm transition";
+  cmsEdit.innerHTML = `Edit listing`;
+  crumbRight.append(publicLink, adminLink, cmsEdit);
 
   crumb.append(crumbLeft, crumbRight);
 
