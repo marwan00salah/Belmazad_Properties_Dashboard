@@ -32,6 +32,23 @@ Internal operations dashboard for Belmazad personnel to monitor live property li
 
 ## Updates
 
+### v1.6 — Property CMS: create, edit & manage listings + company accounts (2026-06-28)
+
+The dashboard can now create and edit property listings end-to-end, and create company/institution user accounts.
+
+**Create & edit properties**
+- New **CMS → create property** flow: a guided, multi-step wizard (Basics · Pricing · Location · Details · Entities · Media · Review) you can fill in any order — required fields are checked when you submit.
+- **Rich-text** descriptions with a formatting toolbar and source view; a **Google-Maps pin picker** (drag the pin, or locate it from the typed address) that keeps latitude/longitude in sync.
+- Live **state → city** and **seller / broker / auctioneer / sub-admin** pickers, searchable by name.
+- **manage properties** lists every listing (active *and* inactive) with search; pick one to **edit** it pre-filled. An **Edit listing** button also sits on each property's detail page.
+- **Photos**: drag to reorder (the first image is the cover), add, and delete — when editing, existing photos reorder too. Plus document attachments.
+
+**Company & institution accounts**
+- **Create user** now offers **Individual / Company / Institution** account types. Company and Institution accounts collect the company name and the required documents (tax card / trade license, or licence / tax id) and upload them with the account.
+
+**Backend (Cloudflare Worker)**
+- New routes create and update listings (mirroring belmazad.com's own two-step form + image upload), proxy the city / entity / geocode lookups, and load a listing for editing. User-document uploads are carried inline and forwarded as real file uploads.
+
 ### v1.5 — AI Agents (2026-05-22)
 
 The dashboard now hosts conversational AI agents alongside the listings and CMS surfaces.

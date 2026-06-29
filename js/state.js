@@ -47,6 +47,16 @@ const initial = {
     result: null,        // last successful Worker response (status:"ok" | "partial")
     error: null,         // last error (validation/network) for inline banner
   },
+  // ADD-PROPERTY: staged "Create property" wizard state. `step` is the
+  // 0-based wizard step index; field VALUES live in a module cache inside
+  // views/create-property.js (same pattern as admin.js — avoids per-keystroke
+  // setState). Only step/submitting/result/error drive re-renders.
+  property: {
+    step: 0,             // current wizard step (0-based)
+    submitting: false,   // toggled while POST /admin/property is in-flight
+    result: null,        // last successful Worker response (newPropertyId, images…)
+    error: null,         // last error (validation/network) for inline banner
+  },
   // AGENT-04: per-agent chat sessions, keyed by agentId →
   //   { sessionId, mode, messages:[{role,text,ts}], sending, error }
   // UNLIKE every other slice in this file, this one is **persisted to
@@ -120,6 +130,11 @@ export function setBuyer(buyerId, slice) {
 // ADMIN-02: shallow-merge a patch into the admin slice and notify.
 export function setAdmin(patch) {
   setState({ admin: { ...state.admin, ...patch } });
+}
+
+// ADD-PROPERTY: shallow-merge a patch into the property-wizard slice and notify.
+export function setProperty(patch) {
+  setState({ property: { ...state.property, ...patch } });
 }
 
 // ── AGENT-04: per-agent chat session helpers ──────────────────────────────

@@ -37,6 +37,22 @@
        background. Loaded synchronously so renderAdminLanding() can call
        particlesJS() on its rAF tick without coordinating script-load events. -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/particles.js/2.0.0/particles.min.js"></script>
+
+  <!-- Google Maps JS API — powers the add-property pin picker (create-property.js).
+       Reuses belmazad.com's own key (it's public in their page source); the
+       create-property geo cell mirrors their draggable-marker ↔ lat/lng setup.
+       NOTE: this key must allow this dashboard's referrers (marwan00salah.github.io
+       + localhost) in Google Cloud, else Google returns RefererNotAllowedMapError
+       and the map silently fails. Loaded async; the callback fires a DOM event the
+       geo cell waits on (define the callback BEFORE the async script so the API
+       can't invoke it before it exists). -->
+  <script>window.__belmazadMapsReady = function () { document.dispatchEvent(new Event("gmaps:ready")); };</script>
+  <script async src="https://maps.googleapis.com/maps/api/js?v=3&loading=async&key=AIzaSyCOote1AFTDuqbLOqgrKLm37MSxkXxgPOM&callback=__belmazadMapsReady"></script>
+
+  <!-- SortableJS (CDN) — drag-to-order the create/edit property photo queue
+       (create-property.js). Loaded synchronously so the gallery can call
+       Sortable.create() on render without coordinating load events. -->
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
 </head>
 <body class="bg-ink-50 text-ink-900 antialiased">
   <div id="app" class="min-h-screen flex flex-col"></div>

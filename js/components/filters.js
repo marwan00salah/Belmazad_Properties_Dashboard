@@ -39,8 +39,16 @@ const CHEVRON = `<svg width="12" height="12" viewBox="0 0 20 20" fill="currentCo
 // Shared button-with-popup-menu. Same open/close (pick / outside-click /
 // Escape) + __cleanup that drops the global listeners if torn down while open.
 // `buttonInner(active)` returns the trigger's innerHTML for the active option.
-function buildDropdown({ value, options, onPick, buttonInner, menuAlign = "right" }) {
-  const active = options.find(o => o.value === value) || options[0];
+// Exported so other surfaces (e.g. the create-property wizard) can render the
+// same dropdown. `buttonClass` overrides the trigger style; `fullWidth` makes
+// the trigger + menu span their container (form fields) instead of hugging
+// content (filter bar).
+// `loadOptions` (async () => [{value,label}]) defers the option list until the
+// menu is first opened (lazy fetch — e.g. listing entities scraped by the
+// Worker). When given, `options` is just the initial/placeholder list shown on
+// the trigger; the real rows load on first open and are cached thereafter.
+export function buildDropdown({ value, options, onPick, buttonInner, menuAlign = "right", buttonClass, fullWidth = false, searchable = false, loadOptions = null }) {
+  const active = options.find(o => o.value === value) || options[0] || { value: "", label: "" };
 
   const wrap = document.createElement("div");
   wrap.className = "relative";
@@ -49,21 +57,67 @@ function buildDropdown({ value, options, onPick, buttonInner, menuAlign = "right
   btn.type = "button";
   btn.setAttribute("aria-haspopup", "menu");
   btn.setAttribute("aria-expanded", "false");
-  btn.className = DROPDOWN_BTN_CLS;
+  btn.className = buttonClass || DROPDOWN_BTN_CLS;
   btn.innerHTML = buttonInner(active);
 
   const menu = document.createElement("div");
   menu.setAttribute("role", "menu");
-  menu.className = `absolute ${menuAlign === "left" ? "left-0" : "right-0"} mt-1 z-30 min-w-[12rem] max-h-72 overflow-auto rounded-lg border border-ink-200 bg-white shadow-lg py-1 hidden`;
-  for (const o of options) {
-    const opt = document.createElement("button");
-    opt.type = "button";
-    opt.setAttribute("role", "menuitem");
-    opt.className = "block w-full text-left px-3 py-1.5 text-sm transition " +
-      (o.value === active.value ? "text-brand-700 font-semibold bg-brand-50" : "text-ink-700 hover:bg-ink-50");
-    opt.textContent = o.label;
-    opt.addEventListener("click", () => { setOpen(false); onPick(o.value); });
-    menu.appendChild(opt);
+  menu.className = `absolute ${fullWidth ? "left-0 right-0" : (menuAlign === "left" ? "left-0" : "right-0")} mt-1 z-30 ${fullWidth ? "" : "min-w-[12rem]"} max-h-72 overflow-auto rounded-lg border border-ink-200 bg-white shadow-lg py-1 hidden`;
+
+  // Optional type-to-filter box (long lists, e.g. listing entities). Filters
+  // option rows live by substring; stays pinned at the top of the scroll area.
+  let searchBox = null;
+  if (searchable) {
+    searchBox = document.createElement("input");
+    searchBox.type = "text";
+    searchBox.placeholder = "Search…";
+    searchBox.className = "sticky top-0 z-10 w-full bg-white px-3 py-1.5 text-sm border-b border-ink-100 outline-none";
+    searchBox.addEventListener("click", (e) => e.stopPropagation());
+    searchBox.addEventListener("input", () => {
+      const q = searchBox.value.trim().toLowerCase();
+      menu.querySelectorAll('[role="menuitem"]').forEach((o) => {
+        o.classList.toggle("hidden", !!q && !o.textContent.toLowerCase().includes(q));
+      });
+    });
+    menu.appendChild(searchBox);
+  }
+
+  // Option rows live in their own host so a lazy load can replace them without
+  // disturbing the (sticky) search box above.
+  const optionsHost = document.createElement("div");
+  menu.appendChild(optionsHost);
+
+  function buildRows(opts) {
+    optionsHost.innerHTML = "";
+    const act = opts.find(o => o.value === value) || opts[0];
+    for (const o of opts) {
+      const opt = document.createElement("button");
+      opt.type = "button";
+      opt.setAttribute("role", "menuitem");
+      opt.className = "block w-full text-left px-3 py-1.5 text-sm transition " +
+        (act && o.value === act.value ? "text-brand-700 font-semibold bg-brand-50" : "text-ink-700 hover:bg-ink-50");
+      opt.textContent = o.label;
+      opt.addEventListener("click", () => { setOpen(false); onPick(o.value); });
+      optionsHost.appendChild(opt);
+    }
+  }
+
+  let loaded = !loadOptions;
+  if (loaded) buildRows(options);
+  else optionsHost.innerHTML = `<div class="px-3 py-2 text-sm text-ink-400">Loading…</div>`;
+
+  async function ensureLoaded() {
+    if (loaded) return;
+    loaded = true;
+    optionsHost.innerHTML = `<div class="px-3 py-2 text-sm text-ink-400">Loading…</div>`;
+    try {
+      const opts = await loadOptions();
+      if (!opts || !opts.length) { optionsHost.innerHTML = `<div class="px-3 py-2 text-sm text-ink-400">None found</div>`; return; }
+      buildRows(opts);
+    } catch {
+      loaded = false;  // allow a retry on next open
+      optionsHost.innerHTML = `<div class="px-3 py-2 text-sm text-urgent-600">Couldn't load — try again</div>`;
+    }
   }
 
   let open = false;
@@ -75,8 +129,10 @@ function buildDropdown({ value, options, onPick, buttonInner, menuAlign = "right
     menu.classList.toggle("hidden", !open);
     btn.setAttribute("aria-expanded", String(open));
     if (open) {
+      ensureLoaded();   // lazy fetch on first open (no-op when not using loadOptions)
       document.addEventListener("click", onDoc, true);
       document.addEventListener("keydown", onKey);
+      if (searchBox) requestAnimationFrame(() => searchBox.focus());
     } else {
       document.removeEventListener("click", onDoc, true);
       document.removeEventListener("keydown", onKey);

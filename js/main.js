@@ -205,7 +205,7 @@ function render() {
     app.appendChild(renderSignInPanel());
   } else if (route.name === "detail") {
     app.appendChild(renderDetail(route.params.propertyId));
-  } else if (route.name === "landing" || route.name === "admin-create-user") {
+  } else if (route.name === "landing" || route.name === "admin-create-user" || route.name === "admin-create-property" || route.name === "admin-edit-property" || route.name === "admin-properties") {
     app.appendChild(renderAdmin());
   } else if (route.name === "ai-agents-index" || route.name === "ai-agent") {
     // AGENT-07: AI Agents area — index grid or per-agent chat surface.

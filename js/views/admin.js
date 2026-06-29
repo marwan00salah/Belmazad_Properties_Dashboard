@@ -16,8 +16,9 @@
 //     we never see/handle credentials.
 
 import { getState, setAdmin } from "../state.js";
-import { createAdminUser, AuthRequiredError } from "../api.js";
+import { createAdminUser, fetchPropertyList, AuthRequiredError } from "../api.js";
 import { AGENTS } from "../agents.js";
+import { renderCreateProperty } from "./create-property.js";
 
 // ── Form-value cache (survives re-renders, separate from state slice) ─────
 
@@ -29,12 +30,15 @@ const formCache = {
 
 function defaultBuyer() {
   return {
+    user_type: "1",                  // ADMIN-08: 1=Individual, 2=Company, 3=Institution
     firstName: "", lastName: "", email: "",
     country_id: "20",                // Egypt — overridable in the dropdown
     cellNumber: "",
     userAddress: "", city: "",
     nationalIdNumber: "",
     looking_property: "0",           // Residential — server-required, sane default
+    // Company/Institution-only (ADMIN-08): name + base64 document objects.
+    company_name: "", tax_id: "", trade_license: "",
   };
 }
 function defaultAgent() {
@@ -54,6 +58,9 @@ function defaultAgent() {
     countryCode: "EGY",     // Country of residence — Egypt
     stateCode: "3",         // Governorate — Cairo
     selling_property: "5",  // Property type — All Types (most permissive)
+    agentType: "1",         // ADMIN-08: 1=Individual, 2=Company, 3=Institution
+    // Company/Institution-only (ADMIN-08): business name + base64 docs.
+    businessName: "", licenceNumber: "", taxIdNumber: "",
   };
 }
 
@@ -85,6 +92,14 @@ const LOOKING_PROPERTY = [
   ["4", "Bulk Sale"],
 ];
 
+// ADMIN-08: account type. Company/Institution reveal company name + document
+// uploads (sent as base64 in the JSON; the Worker decodes them upstream).
+const ACCOUNT_TYPES = [
+  ["1", "Individual"],
+  ["2", "Company"],
+  ["3", "Institution"],
+];
+
 // particles.js config for the #/ landing background. Tuned to the project
 // brand palette: indigo dots (#4f46e5 = brand-600) on softer indigo linked
 // lines (#a5b4fc = brand-300). Hover-repulse + click-bubble interactivity.
@@ -99,6 +114,9 @@ const LOOKING_PROPERTY = [
 export function renderAdmin() {
   const { route } = getState();
   if (route?.name === "admin-create-user") return renderCreateUser();
+  if (route?.name === "admin-create-property") return renderCreateProperty();
+  if (route?.name === "admin-edit-property") return renderCreateProperty();   // edit reuses the wizard
+  if (route?.name === "admin-properties") return renderPropertiesList();
   return renderAdminLanding();
 }
 
@@ -284,7 +302,17 @@ function buildCmsGroup() {
   // user" has none today but a future child might.
   createUser.classList.add("ml-16", "pt-4", "pb-1");
 
+  // ADD-PROPERTY: second cms child — the staged property-creation wizard.
+  const createProperty = actionLink("create property", "#/cms/create-property");
+  createProperty.classList.add("ml-16", "pt-4", "pb-1");
+
+  // ADD-PROPERTY edit: CMS list of all listings (active + inactive) → edit.
+  const manageProperties = actionLink("manage properties", "#/cms/properties");
+  manageProperties.classList.add("ml-16", "pt-4", "pb-1");
+
   children.appendChild(createUser);
+  children.appendChild(createProperty);
+  children.appendChild(manageProperties);
   wrap.appendChild(children);
 
   parent.addEventListener("click", () => {
@@ -368,6 +396,96 @@ function nameFromEmail(email) {
   return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
 }
 
+// ADD-PROPERTY edit: CMS list of every listing (active + inactive) from the
+// admin index (Worker /property/list). Each row links into the edit wizard.
+// Module-cached so incidental re-renders don't refetch; a debounced search
+// repopulates the live results container without a full re-render.
+let _propsCache = null;       // { properties, total, truncated, error? }
+let _propsQuery = "";
+
+function renderPropertiesList() {
+  const root = document.createElement("div");
+  root.className = "mx-auto w-full max-w-4xl p-4 sm:p-6 lg:p-8 space-y-5";
+
+  const head = document.createElement("div");
+  head.innerHTML = `
+    <h1 class="text-3xl font-extrabold tracking-tight text-ink-900">Manage properties</h1>
+    <p class="mt-2 text-sm text-ink-600">Every listing on belmazad.com — active and inactive. Click a row to open it in the edit wizard.</p>`;
+  root.appendChild(head);
+
+  const bar = document.createElement("div");
+  bar.className = "flex items-center gap-3";
+  const search = document.createElement("input");
+  search.type = "search";
+  search.id = "cms-props-search";
+  search.placeholder = "Search by name or number…";
+  search.value = _propsQuery;
+  search.className = "flex-1 rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none transition";
+  let deb;
+  search.addEventListener("input", () => { clearTimeout(deb); deb = setTimeout(() => loadPropsList(search.value.trim()), 350); });
+  const newBtn = document.createElement("a");
+  newBtn.href = "#/cms/create-property";
+  newBtn.className = "inline-flex items-center gap-1.5 rounded-lg bg-brand-600 text-white hover:bg-brand-700 px-3 py-2 text-sm font-semibold shadow-sm transition";
+  newBtn.textContent = "+ New";
+  bar.append(search, newBtn);
+  root.appendChild(bar);
+
+  const results = document.createElement("div");
+  results.id = "cms-props-results";
+  results.className = "space-y-2";
+  root.appendChild(results);
+
+  // Cache covers the no-search view; else (or on a search) fetch fresh.
+  if (_propsCache && _propsQuery === "") renderPropsRows(_propsCache, results);
+  else loadPropsList(_propsQuery);
+
+  return root;
+}
+
+async function loadPropsList(query) {
+  _propsQuery = query;
+  const c0 = document.getElementById("cms-props-results");
+  if (c0) c0.innerHTML = `<div class="text-sm text-ink-500 py-6 text-center">Loading…</div>`;
+  const data = await fetchPropertyList(query);
+  _propsCache = data;
+  const live = document.getElementById("cms-props-results");
+  if (live) renderPropsRows(data, live);
+}
+
+function renderPropsRows(data, container) {
+  container.innerHTML = "";
+  if (data.error) {
+    container.innerHTML = `<div class="rounded-xl border border-urgent-100 bg-urgent-50 text-urgent-600 p-3 text-sm">${escapeHtml(data.error)}</div>`;
+    return;
+  }
+  if (!data.properties.length) {
+    container.innerHTML = `<div class="text-sm text-ink-500 py-6 text-center">No properties found.</div>`;
+    return;
+  }
+  const count = document.createElement("div");
+  count.className = "text-xs text-ink-500";
+  count.textContent = `${data.properties.length}${data.total && data.total > data.properties.length ? ` of ${data.total}` : ""} listing${data.properties.length === 1 ? "" : "s"}`;
+  container.appendChild(count);
+  for (const p of data.properties) container.appendChild(propRow(p));
+}
+
+function propRow(p) {
+  const row = document.createElement("a");
+  row.href = `#/cms/edit-property/${p.id}`;
+  row.className = "flex items-center gap-3 rounded-xl border border-ink-100 bg-white p-3 shadow-sm hover:border-brand-300 hover:bg-brand-50/30 transition";
+  const active = /^\s*active\s*$/i.test(p.status || "");
+  const badge = `<span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${active ? "bg-insight-50 text-insight-700" : "bg-ink-100 text-ink-500"}">${escapeHtml(p.status || "—")}</span>`;
+  row.innerHTML = `
+    <span class="shrink-0 w-14 text-xs font-mono text-ink-400">#${escapeHtml(p.id)}</span>
+    <span class="flex-1 min-w-0">
+      <span class="block truncate text-sm font-semibold text-ink-900">${escapeHtml(p.name || "(untitled)")}</span>
+      <span class="block truncate text-xs text-ink-500">${escapeHtml(p.address || "")}</span>
+    </span>
+    ${badge}
+    <span class="shrink-0 text-xs font-semibold text-brand-600">Edit →</span>`;
+  return row;
+}
+
 // The Create-user form lives at #/cms/create-user — pulled out of the
 // landing so the landing stays a clean index.
 function renderCreateUser() {
@@ -378,7 +496,7 @@ function renderCreateUser() {
   const title = document.createElement("div");
   title.innerHTML = `
     <h1 class="text-3xl font-extrabold tracking-tight text-ink-900">Create user</h1>
-    <p class="mt-2 text-sm text-ink-600">Create a buyer, broker, or seller account directly on belmazad.com. The new user receives sign-in details by email from <code class="rounded bg-ink-100 px-1.5 py-0.5 text-xs">noreply@belmazad.com</code>. v1 supports Individual accounts only — Company / Institution accounts stay in the admin site.</p>
+    <p class="mt-2 text-sm text-ink-600">Create a buyer, broker, or seller account directly on belmazad.com. The new user receives sign-in details by email from <code class="rounded bg-ink-100 px-1.5 py-0.5 text-xs">noreply@belmazad.com</code>. Individual, Company, and Institution accounts are all supported — choose the account type, and Company / Institution will ask for the company name and required documents.</p>
   `;
   root.appendChild(title);
 
@@ -431,6 +549,10 @@ function renderForm(type, submitting) {
   const grid = document.createElement("div");
   grid.className = "grid grid-cols-1 sm:grid-cols-2 gap-4";
 
+  // ADMIN-08: account type drives the company fields below; re-render on change.
+  const acctField = (type === "buyer") ? "user_type" : "agentType";
+  grid.appendChild(selectField(type, acctField, "Account type", ACCOUNT_TYPES, { required: true, colspan: 2, rerender: true }));
+
   grid.appendChild(textField(type, "firstName", "First name", { required: true }));
   grid.appendChild(textField(type, "lastName",  "Last name",  { required: true }));
   grid.appendChild(textField(type, "email",     "Email",       { required: true, type: "email", placeholder: "name@example.com", colspan: 2 }));
@@ -446,6 +568,20 @@ function renderForm(type, submitting) {
   // Buyer-only: what type of property are they looking for (server-required)
   if (type === "buyer") {
     grid.appendChild(selectField(type, "looking_property", "Property interest", LOOKING_PROPERTY, { required: true, colspan: 2 }));
+  }
+
+  // ADMIN-08: Company / Institution → company name + document uploads.
+  const acct = formCache[type][acctField];
+  if (acct === "2" || acct === "3") {
+    if (type === "buyer") {
+      grid.appendChild(textField(type, "company_name", "Company name", { required: true, colspan: 2 }));
+      grid.appendChild(fileField(type, "tax_id", "Document of Tax Card", { required: true }));
+      grid.appendChild(fileField(type, "trade_license", "Document of Trade License", { required: true }));
+    } else {
+      grid.appendChild(textField(type, "businessName", "Business name", { required: true, colspan: 2 }));
+      grid.appendChild(fileField(type, "licenceNumber", "Licence document", { required: true }));
+      grid.appendChild(fileField(type, "taxIdNumber", "Tax ID document", { required: true }));
+    }
   }
 
   card.appendChild(grid);
@@ -505,7 +641,7 @@ function textField(type, name, label, opts = {}) {
 }
 
 function selectField(type, name, label, options, opts = {}) {
-  const { required, colspan } = opts;
+  const { required, colspan, rerender } = opts;
   const cell = document.createElement("div");
   cell.className = `space-y-1.5 ${colspan === 2 ? "sm:col-span-2" : ""}`;
   const lab = document.createElement("label");
@@ -527,10 +663,56 @@ function selectField(type, name, label, options, opts = {}) {
   }
   sel.addEventListener("change", (e) => {
     formCache[type][name] = e.target.value;
+    // ADMIN-08: account-type change reveals/hides the company fields.
+    if (rerender) setAdmin({});
   });
   cell.appendChild(lab);
   cell.appendChild(sel);
   return cell;
+}
+
+// ADMIN-08: file input that stores a base64 document object in formCache
+// ({ filename, type, b64 }) — sent inside the JSON payload (no multipart).
+// The <input type=file> can't be programmatically pre-filled, so on re-render
+// the picked filename is shown as status text while formCache keeps the data.
+function fileField(type, name, label, opts = {}) {
+  const { required } = opts;
+  const cell = document.createElement("div");
+  cell.className = "space-y-1.5";
+  const lab = document.createElement("label");
+  lab.className = "block text-sm font-semibold text-ink-700";
+  lab.innerHTML = `${label}${required ? ' <span class="text-urgent-600">*</span>' : ""}`;
+  const input = document.createElement("input");
+  input.type = "file";
+  input.id = `admin-${type}-${name}`;
+  input.accept = "image/*,.pdf";
+  input.className = "block w-full text-sm text-ink-600 file:mr-3 file:rounded-lg file:border-0 file:bg-brand-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-brand-700 hover:file:bg-brand-100";
+  const status = document.createElement("p");
+  status.className = "text-xs text-ink-500";
+  const cur = formCache[type][name];
+  if (cur && cur.filename) status.textContent = `Selected: ${cur.filename}`;
+  input.addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) { formCache[type][name] = ""; status.textContent = ""; return; }
+    status.textContent = "Reading…";
+    formCache[type][name] = await readFileB64(file);
+    status.textContent = `Selected: ${file.name}`;
+  });
+  cell.append(lab, input, status);
+  return cell;
+}
+
+function readFileB64(file) {
+  return new Promise((resolve) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const res = String(r.result || "");
+      const i = res.indexOf(",");
+      resolve({ filename: file.name, type: file.type || "application/octet-stream", b64: i >= 0 ? res.slice(i + 1) : res });
+    };
+    r.onerror = () => resolve({ filename: file.name, type: file.type, b64: "" });
+    r.readAsDataURL(file);
+  });
 }
 
 // ── Banners ───────────────────────────────────────────────────────────────
@@ -631,6 +813,8 @@ async function handleSubmit(type) {
   const fields = {};
   for (const [k, v] of Object.entries(formCache[type])) {
     if (v == null) continue;
+    // ADMIN-08: base64 document objects pass through as-is (don't stringify).
+    if (typeof v === "object") { if (v.b64) fields[k] = v; continue; }
     const s = String(v).trim();
     if (s !== "") fields[k] = s;
   }

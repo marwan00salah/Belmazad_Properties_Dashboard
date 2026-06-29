@@ -81,6 +81,141 @@ export async function createAdminUser({ type, fields }) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// ADD-PROPERTY: POST /admin/property. Any signed-in CF Access user. UNLIKE
+// createAdminUser (JSON), this sends **multipart FormData** because the form
+// carries real image/doc file uploads. The dashboard packs every belmazad
+// field as a form part (scalars by their upstream names), the rich
+// `cleanPropertyDescription`, and repeated `images` / `docs` File parts. The
+// Worker then mirrors the two-phase belmazad flow: scalars → /admin/property/
+// addForm/ (returns propertyId), then each image → /admin/property/addimage/
+// {propertyId}. Returns { ok, status, data } — same wrapper as createAdminUser.
+// Throws AuthRequiredError on CF Access cookie-blocked rejection.
+export async function createAdminProperty(formData) {
+  let res;
+  try {
+    res = await fetch(new URL("admin/property", WORKER_URL).toString(), {
+      method: "POST",
+      // No Content-Type header: the browser sets multipart/form-data + the
+      // boundary automatically from the FormData body.
+      headers: { "Accept": "application/json" },
+      credentials: "include",
+      body: formData,
+    });
+  } catch {
+    throw new AuthRequiredError();
+  }
+  let data = null;
+  try { data = await res.json(); } catch {}
+  return { ok: res.ok, status: res.status, data };
+}
+
+// ADD-PROPERTY: cascade lookups proxied through the Worker (belmazad's
+// /user/getStates + /user/getCity need the admin/buyer session cookie, which
+// only the Worker holds). Both fail-soft — return [] on any error so the
+// location step falls back to a free-text "Other" rather than breaking the
+// wizard. The Worker normalizes belmazad's UPPERCASE {ERROR,STATES|CITY}
+// envelope into a plain array of { code, name } (city code = belmazad cityId).
+export async function fetchPropertyStates(countryId = "EGY") {
+  try {
+    const res = await fetch(
+      new URL(`property/states?country=${encodeURIComponent(countryId)}`, WORKER_URL).toString(),
+      { method: "GET", headers: { "Accept": "application/json" }, credentials: "include" },
+    );
+    if (!res.ok) return [];
+    const json = await res.json();
+    return Array.isArray(json.states) ? json.states : [];
+  } catch {
+    return [];
+  }
+}
+
+// ADD-PROPERTY edit: load a listing's current values for the wizard.
+// GET /property/load?id= → { propertyId, fields:{…}, images:[filename,…] }.
+// Fail-soft → null so the caller can show an error state.
+export async function loadProperty(id) {
+  try {
+    const res = await fetch(
+      new URL(`property/load?id=${encodeURIComponent(id)}`, WORKER_URL).toString(),
+      { method: "GET", headers: { "Accept": "application/json" }, credentials: "include" },
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    if (json && json.status === "ok") return { fields: json.fields || {}, images: json.images || [], entityLabels: json.entityLabels || {}, propertyId: String(json.propertyId || id) };
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ADD-PROPERTY: CMS list of all properties (admin index, incl. inactive).
+// GET /property/list[?search=] → { properties:[{id,name,address,status}], total }.
+// Fail-soft → { properties:[], error }.
+export async function fetchPropertyList(search = "") {
+  try {
+    const u = new URL("property/list", WORKER_URL);
+    if (search) u.searchParams.set("search", search);
+    const res = await fetch(u.toString(), { method: "GET", headers: { "Accept": "application/json" }, credentials: "include" });
+    if (!res.ok) return { properties: [], total: 0, error: `Request failed (${res.status})` };
+    const json = await res.json();
+    return { properties: Array.isArray(json.properties) ? json.properties : [], total: json.total ?? 0, truncated: !!json.truncated };
+  } catch {
+    return { properties: [], total: 0, error: "Couldn't reach the server." };
+  }
+}
+
+// ADD-PROPERTY: listing-entity pickers (seller=Checker, broker=Maker,
+// auctioneer, sub-admin). belmazad renders these as server-side select2 lists
+// of `id → "Name (email)"`; the dashboard can't read them directly (auth +
+// CORS), so the Worker proxies them. Fail-soft → [] so the Entities step
+// falls back to a manual id input until the proxy is deployed. Returns
+// [{ id, name }]. `type` ∈ {agent, seller, auctioneer, subadmin}.
+export async function fetchListingEntities(type) {
+  try {
+    const res = await fetch(
+      new URL(`property/entities?type=${encodeURIComponent(type)}`, WORKER_URL).toString(),
+      { method: "GET", headers: { "Accept": "application/json" }, credentials: "include" },
+    );
+    if (!res.ok) return [];
+    const json = await res.json();
+    return Array.isArray(json.entities) ? json.entities : [];
+  } catch {
+    return [];
+  }
+}
+
+// ADD-PROPERTY: geocode an address → { lat, lang } via the Worker, which
+// proxies belmazad's own /admin/property/findCords/ (admin-gated). Powers the
+// "Locate from address" button on the map. Fail-soft → null. NOTE belmazad
+// names longitude `lang`.
+export async function fetchCoords(address) {
+  try {
+    const res = await fetch(
+      new URL(`property/findcords?address=${encodeURIComponent(address)}`, WORKER_URL).toString(),
+      { method: "GET", headers: { "Accept": "application/json" }, credentials: "include" },
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    if (json && json.lat != null && json.lang != null) return { lat: json.lat, lang: json.lang };
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchPropertyCities(countryId = "EGY", stateCode = "") {
+  try {
+    const res = await fetch(
+      new URL(`property/cities?country=${encodeURIComponent(countryId)}&state=${encodeURIComponent(stateCode)}`, WORKER_URL).toString(),
+      { method: "GET", headers: { "Accept": "application/json" }, credentials: "include" },
+    );
+    if (!res.ok) return [];
+    const json = await res.json();
+    return Array.isArray(json.cities) ? json.cities : [];
+  } catch {
+    return [];
+  }
+}
+
 // AGENT-05: POST /ai-agents/chat. Any signed-in CF Access user. The Worker
 // (AGENT-06) rate-limits + audit-logs + forwards to the agent's n8n
 // chatTrigger webhook with the X-Belmazad-N8N-Secret header. Wire payload
